@@ -1,7 +1,10 @@
 import asyncio
 import json
 import ssl
-from typing import Dict, List, Tuple
+import os
+import subprocess
+import time
+from typing import Dict, List
 
 # ----------------------------
 # Config / constants
@@ -11,10 +14,23 @@ METADATA_FILE = "metadata.json"
 HEARTBEAT_INTERVAL = 30  # seconds
 MAX_CONCURRENT_REPAIRS = 5
 
-# TLS context
-ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-ssl_context.load_cert_chain(certfile="cert.pem", keyfile="key.pem")
+CERT_FILE = "cert.pem"
+KEY_FILE = "key.pem"
 
+# ----------------------------
+# TLS setup with auto cert generation
+# ----------------------------
+if not os.path.exists(CERT_FILE) or not os.path.exists(KEY_FILE):
+    print("TLS cert/key not found, generating self-signed certificate...")
+    subprocess.run([
+        "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+        "-keyout", KEY_FILE, "-out", CERT_FILE, "-days", "365",
+        "-subj", "/C=US/ST=State/L=City/O=LibreMesh/CN=localhost"
+    ], check=True)
+    print(f"Generated {CERT_FILE} and {KEY_FILE}")
+
+ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+ssl_context.load_cert_chain(certfile=CERT_FILE, keyfile=KEY_FILE)
 
 # ----------------------------
 # Data models
@@ -32,7 +48,7 @@ class NodeInfo:
 class FragmentInfo:
     def __init__(self, fragment_id: str):
         self.fragment_id = fragment_id
-        self.nodes: List[str] = []  # node_ids holding this fragment
+        self.nodes: List[str] = []
 
 # ----------------------------
 # Satellite
@@ -66,7 +82,6 @@ class Satellite:
             await self.update_node(message)
         elif msg_type == "repair_request":
             await self.assign_repair(message)
-        # more message types can be added here
 
     async def update_node(self, message: dict):
         node_id = message["node_id"]
@@ -89,9 +104,25 @@ class Satellite:
         while True:
             fragment_id = await self.repair_queue.get()
             print(f"Processing repair for fragment {fragment_id}")
-            # logic to assign repair to repair nodes here
-            await asyncio.sleep(0.1)  # placeholder
+            # placeholder: assign repair to repair nodes
+            await asyncio.sleep(0.1)
             self.repair_queue.task_done()
+
+    async def display_ascii_table(self):
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
+            async with self.lock:
+                print("\n=== Satellite Node Status ===")
+                if not self.nodes:
+                    print("No nodes connected.")
+                else:
+                    print(f"{'Node ID':<15} {'Region':<10} {'Rank':<5} {'Uptime':<10} {'Fragments':<20}")
+                    print("-" * 70)
+                    for node in self.nodes.values():
+                        uptime_str = str(node.uptime)
+                        fragments_str = ",".join(node.fragments)
+                        print(f"{node.node_id:<15} {node.region:<10} {node.rank:<5} {uptime_str:<10} {fragments_str:<20}")
+                print("=" * 70)
 
     async def start_server(self):
         server = await asyncio.start_server(
@@ -101,16 +132,14 @@ class Satellite:
         async with server:
             await server.serve_forever()
 
-
 # ----------------------------
 # Main
 # ----------------------------
 async def main():
     satellite = Satellite()
-    # Start repair workers
     for _ in range(MAX_CONCURRENT_REPAIRS):
         asyncio.create_task(satellite.repair_worker())
-    # Start server
+    asyncio.create_task(satellite.display_ascii_table())
     await satellite.start_server()
 
 if __name__ == "__main__":
