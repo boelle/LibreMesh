@@ -12,6 +12,7 @@ SATELLITE_PORT = 4001
 HEARTBEAT_INTERVAL = 5  # seconds for table updates
 MAX_CONCURRENT_REPAIRS = 5
 MAX_NOTIFICATIONS = 10
+REPAIR_PROCESS_DELAY = 2  # seconds per repair job (slowed down for visibility)
 
 CERT_FILE = "cert.pem"
 KEY_FILE = "key.pem"
@@ -104,7 +105,8 @@ class Satellite:
         while True:
             fragment_id = await self.repair_queue.get()
             self.add_notification(f"Processing repair for fragment {fragment_id}")
-            await asyncio.sleep(0.1)  # placeholder for repair logic
+            # Simulate repair processing delay
+            await asyncio.sleep(REPAIR_PROCESS_DELAY)
             self.repair_queue.task_done()
 
     def add_notification(self, msg: str):
