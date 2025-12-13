@@ -1,121 +1,100 @@
 import asyncio
 import ssl
 import os
-import json
+import socket
 from datetime import datetime
 
 HOST = "0.0.0.0"
 PORT = 4001
-REPAIR_PROCESS_DELAY = 10  # slowed down for visible queue
+CERT_FILE = "cert.pem"
+KEY_FILE = "key.pem"
 
-ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-if not os.path.exists("cert.pem") or not os.path.exists("key.pem"):
-    print("TLS cert/key not found, generating self-signed certificate...")
-    from cryptography import x509
-    from cryptography.x509.oid import NameOID
-    from cryptography.hazmat.primitives import serialization, hashes
-    from cryptography.hazmat.primitives.asymmetric import rsa
-    import datetime as dt
-
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    with open("key.pem", "wb") as f:
-        f.write(key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.TraditionalOpenSSL,
-            encryption_algorithm=serialization.NoEncryption()
-        ))
-    subject = issuer = x509.Name([
-        x509.NameAttribute(NameOID.COUNTRY_NAME, u"US"),
-        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, u"CA"),
-        x509.NameAttribute(NameOID.LOCALITY_NAME, u"San Francisco"),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, u"LibreMesh"),
-        x509.NameAttribute(NameOID.COMMON_NAME, u"localhost"),
-    ])
-    cert = x509.CertificateBuilder().subject_name(
-        subject
-    ).issuer_name(
-        issuer
-    ).public_key(
-        key.public_key()
-    ).serial_number(x509.random_serial_number()
-    ).not_valid_before(dt.datetime.utcnow()
-    ).not_valid_after(dt.datetime.utcnow() + dt.timedelta(days=365)
-    ).sign(key, hashes.SHA256())
-    with open("cert.pem", "wb") as f:
-        f.write(cert.public_bytes(serialization.Encoding.PEM))
-    print("-----\nGenerated cert.pem and key.pem")
-
-ssl_context.load_cert_chain(certfile="cert.pem", keyfile="key.pem")
-
-nodes = {}
-repair_queue = asyncio.Queue()
+connected_nodes = {}
+repair_queue = []
 notifications = []
+
 MAX_NOTIFICATIONS = 10
+
+# TLS context
+ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+if not os.path.exists(CERT_FILE) or not os.path.exists(KEY_FILE):
+    print("TLS cert/key not found, generating self-signed certificate...")
+    os.system(f"openssl req -x509 -nodes -days 365 -newkey rsa:2048 "
+              f"-keyout {KEY_FILE} -out {CERT_FILE} -subj '/CN=localhost'")
+ssl_context.load_cert_chain(certfile=CERT_FILE, keyfile=KEY_FILE)
 
 def add_notification(msg):
     timestamp = datetime.now().strftime("%H:%M:%S")
     notifications.append(f"{timestamp} - {msg}")
     if len(notifications) > MAX_NOTIFICATIONS:
         notifications.pop(0)
+    print_table()
 
 def print_table():
     os.system("clear")
-    print("=== Repair Queue ===")
-    if repair_queue.empty():
-        print("No repair jobs queued.")
+    print("=== Satellite Node Status ===")
+    print("Node ID         Region     Rank  Uptime     Fragments")
+    print("----------------------------------------------------------------------")
+    for node_id, info in connected_nodes.items():
+        fragments = ",".join(info.get("fragments", []))
+        print(f"{node_id:<15}{info['region']:<10}{info['rank']:<6}{info['uptime']:<10}{fragments}")
+    if not connected_nodes:
+        print()
+    print("\n=== Repair Queue ===")
+    if repair_queue:
+        for idx, job in enumerate(repair_queue, 1):
+            print(f"{idx}. {job}")
     else:
-        for idx, item in enumerate(list(repair_queue._queue)):
-            print(f"{idx+1}. {item}")
-    print("="*70)
+        print("No repair jobs queued.")
+    print("======================================================================\n")
     print("=== Notifications (last 10) ===")
     for note in notifications:
         print(note)
-    print("="*70)
+    print("======================================================================")
+
+async def handle_node(reader, writer):
+    addr = writer.get_extra_info("peername")
+    node_id = f"node{addr[1]}"
+    connected_nodes[node_id] = {"region": "EU", "rank": 85, "uptime": 0, "fragments": [f"frag{i}" for i in range(1,6)]}
+    add_notification(f"Node connected: {addr}")
+    try:
+        while True:
+            data = await reader.read(100)
+            if not data:
+                break
+            # For simplicity, echo back
+            writer.write(data)
+            await writer.drain()
+    except:
+        pass
+    finally:
+        writer.close()
+        await writer.wait_closed()
+        add_notification(f"Node disconnected: {addr}")
+        connected_nodes.pop(node_id, None)
 
 async def repair_worker():
     while True:
-        frag = await repair_queue.get()
-        add_notification(f"Processing repair for fragment {frag}")
-        print_table()
-        await asyncio.sleep(REPAIR_PROCESS_DELAY)
-        repair_queue.task_done()
+        if repair_queue:
+            job = repair_queue.pop(0)
+            add_notification(f"Processing repair for fragment {job}")
+            await asyncio.sleep(10)  # slow down repair so it is visible
+        else:
+            await asyncio.sleep(1)
 
-async def handle_node(reader, writer):
-    addr = writer.get_extra_info('peername')
-    add_notification(f"Node connected: {addr}")
-    print_table()
-
-    while True:
-        try:
-            data = await reader.readline()
-            if not data:
-                break
-            message = json.loads(data.decode())
-            if message.get("type") == "repair_request":
-                frag = message.get("fragment_id")
-                await repair_queue.put(frag)
-                add_notification(f"Repair job queued for fragment {frag}")
-                print_table()
-        except (asyncio.IncompleteReadError, ConnectionResetError):
-            break
-    writer.close()
-    await writer.wait_closed()
-    add_notification(f"Node disconnected: {addr}")
-    print_table()
-
-async def start_server():
-    server = await asyncio.start_server(handle_node, HOST, PORT, ssl=ssl_context)
+async def main():
+    hostname = socket.gethostname()
     add_notification(f"Satellite listening on port {PORT}")
+    add_notification(f"Hostname: {hostname}")
+    os.system("clear")
     print_table()
+    server = await asyncio.start_server(handle_node, HOST, PORT, ssl=ssl_context)
     asyncio.create_task(repair_worker())
     async with server:
         await server.serve_forever()
 
-async def main():
-    try:
-        await start_server()
-    except KeyboardInterrupt:
-        print("\nSatellite shutting down.")
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nSatellite shutting down...")
