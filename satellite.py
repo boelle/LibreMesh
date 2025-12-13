@@ -1,171 +1,127 @@
 import asyncio
-import json
 import ssl
 import os
-import subprocess
-from typing import Dict, List
+import json
+from datetime import datetime
 
-# ----------------------------
-# Config / constants
-# ----------------------------
-SATELLITE_PORT = 4001
-HEARTBEAT_INTERVAL = 5  # seconds for table updates
-MAX_CONCURRENT_REPAIRS = 5
-MAX_NOTIFICATIONS = 10
-REPAIR_PROCESS_DELAY = 2  # seconds per repair job (slowed down for visibility)
+HOST = "0.0.0.0"
+PORT = 4001
+REPAIR_PROCESS_DELAY = 10  # seconds per fragment
 
-CERT_FILE = "cert.pem"
-KEY_FILE = "key.pem"
-
-# ----------------------------
-# TLS setup with auto cert generation
-# ----------------------------
-if not os.path.exists(CERT_FILE) or not os.path.exists(KEY_FILE):
-    print("TLS cert/key not found, generating self-signed certificate...")
-    subprocess.run([
-        "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-        "-keyout", KEY_FILE, "-out", CERT_FILE, "-days", "365",
-        "-subj", "/C=US/ST=State/L=City/O=LibreMesh/CN=localhost"
-    ], check=True)
-    print(f"Generated {CERT_FILE} and {KEY_FILE}")
-
+# Create TLS context
 ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-ssl_context.load_cert_chain(certfile=CERT_FILE, keyfile=KEY_FILE)
+if not os.path.exists("cert.pem") or not os.path.exists("key.pem"):
+    print("TLS cert/key not found, generating self-signed certificate...")
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import serialization, hashes
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    import datetime as dt
 
-# ----------------------------
-# Data models
-# ----------------------------
-class NodeInfo:
-    def __init__(self, node_id: str, region: str):
-        self.node_id = node_id
-        self.region = region
-        self.rank = 100
-        self.online = True
-        self.uptime = 0
-        self.last_heartbeat = 0
-        self.fragments: List[str] = []
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    with open("key.pem", "wb") as f:
+        f.write(key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption()
+        ))
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COUNTRY_NAME, u"US"),
+        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, u"CA"),
+        x509.NameAttribute(NameOID.LOCALITY_NAME, u"San Francisco"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, u"LibreMesh"),
+        x509.NameAttribute(NameOID.COMMON_NAME, u"localhost"),
+    ])
+    cert = x509.CertificateBuilder().subject_name(
+        subject
+    ).issuer_name(
+        issuer
+    ).public_key(
+        key.public_key()
+    ).serial_number(x509.random_serial_number()
+    ).not_valid_before(dt.datetime.utcnow()
+    ).not_valid_after(dt.datetime.utcnow() + dt.timedelta(days=365)
+    ).sign(key, hashes.SHA256())
+    with open("cert.pem", "wb") as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
+    print("-----\nGenerated cert.pem and key.pem")
 
-class FragmentInfo:
-    def __init__(self, fragment_id: str):
-        self.fragment_id = fragment_id
-        self.nodes: List[str] = []
+ssl_context.load_cert_chain(certfile="cert.pem", keyfile="key.pem")
 
-# ----------------------------
-# Satellite
-# ----------------------------
-class Satellite:
-    def __init__(self):
-        self.nodes: Dict[str, NodeInfo] = {}
-        self.fragments: Dict[str, FragmentInfo] = {}
-        self.repair_queue: asyncio.Queue = asyncio.Queue()
-        self.notifications: List[str] = []
-        self.lock = asyncio.Lock()
+# Node registry and repair queue
+nodes = {}
+repair_queue = asyncio.Queue()
+notifications = []
 
-    async def handle_node(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        addr = writer.get_extra_info('peername')
-        self.add_notification(f"Node connected: {addr}")
+MAX_NOTIFICATIONS = 10
+
+# Utility functions
+def add_notification(msg):
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    notifications.append(f"{timestamp} - {msg}")
+    if len(notifications) > MAX_NOTIFICATIONS:
+        notifications.pop(0)
+
+def print_table():
+    os.system("clear")
+    print("=== Repair Queue ===")
+    if repair_queue.empty():
+        print("No repair jobs queued.")
+    else:
+        print(f"{repair_queue.qsize()} job(s) queued.")
+    print("="*70)
+    print("=== Notifications (last 10) ===")
+    for note in notifications:
+        print(note)
+    print("="*70)
+
+# Repair worker
+async def repair_worker():
+    while True:
+        frag = await repair_queue.get()
+        add_notification(f"Processing repair for fragment {frag}")
+        print_table()
+        await asyncio.sleep(REPAIR_PROCESS_DELAY)
+        repair_queue.task_done()
+
+# Handle node connection
+async def handle_node(reader, writer):
+    addr = writer.get_extra_info('peername')
+    add_notification(f"Node connected: {addr}")
+    print_table()
+
+    while True:
         try:
-            while True:
-                data = await reader.readline()
-                if not data:
-                    break
-                message = json.loads(data.decode())
-                await self.process_message(message, writer)
-        except Exception as e:
-            self.add_notification(f"Error with node {addr}: {e}")
-        finally:
-            writer.close()
-            await writer.wait_closed()
+            data = await reader.readline()
+            if not data:
+                break
+            message = json.loads(data.decode())
+            if message.get("type") == "repair_request":
+                frag = message.get("fragment_id")
+                await repair_queue.put(frag)
+                add_notification(f"Repair job queued for fragment {frag}")
+                print_table()
+        except (asyncio.IncompleteReadError, ConnectionResetError):
+            break
+    writer.close()
+    await writer.wait_closed()
+    add_notification(f"Node disconnected: {addr}")
+    print_table()
 
-    async def process_message(self, message: dict, writer: asyncio.StreamWriter):
-        msg_type = message.get("type")
-        if msg_type == "heartbeat":
-            await self.update_node(message)
-        elif msg_type == "repair_request":
-            await self.assign_repair(message)
+# Main server
+async def start_server():
+    server = await asyncio.start_server(handle_node, HOST, PORT, ssl=ssl_context)
+    add_notification(f"Satellite listening on port {PORT}")
+    print_table()
+    asyncio.create_task(repair_worker())
+    async with server:
+        await server.serve_forever()
 
-    async def update_node(self, message: dict):
-        node_id = message["node_id"]
-        async with self.lock:
-            if node_id not in self.nodes:
-                self.nodes[node_id] = NodeInfo(node_id, message.get("region", "unknown"))
-            node = self.nodes[node_id]
-            node.uptime = message.get("uptime", node.uptime)
-            node.rank = message.get("rank", node.rank)
-            node.last_heartbeat = message.get("timestamp", node.last_heartbeat)
-            node.fragments = message.get("fragments", node.fragments)
-
-    async def assign_repair(self, message: dict):
-        fragment_id = message["fragment_id"]
-        async with self.lock:
-            await self.repair_queue.put(fragment_id)
-            self.add_notification(f"Repair job queued for fragment {fragment_id}")
-
-    async def repair_worker(self):
-        while True:
-            fragment_id = await self.repair_queue.get()
-            self.add_notification(f"Processing repair for fragment {fragment_id}")
-            # Simulate repair processing delay
-            await asyncio.sleep(REPAIR_PROCESS_DELAY)
-            self.repair_queue.task_done()
-
-    def add_notification(self, msg: str):
-        self.notifications.append(msg)
-        if len(self.notifications) > MAX_NOTIFICATIONS:
-            self.notifications.pop(0)
-
-    def print_ascii_table(self):
-        os.system('cls' if os.name == 'nt' else 'clear')
-        print("\n=== Satellite Node Status ===")
-        if not self.nodes:
-            print("No nodes connected.")
-        else:
-            print(f"{'Node ID':<15} {'Region':<10} {'Rank':<5} {'Uptime':<10} {'Fragments':<20}")
-            print("-" * 70)
-            for node in self.nodes.values():
-                uptime_str = str(node.uptime)
-                fragments_str = ",".join(node.fragments)
-                print(f"{node.node_id:<15} {node.region:<10} {node.rank:<5} {uptime_str:<10} {fragments_str:<20}")
-        print("\n=== Repair Queue ===")
-        if self.repair_queue.empty():
-            print("No repair jobs queued.")
-        else:
-            queued = list(self.repair_queue._queue)
-            for frag in queued:
-                print(f"Fragment: {frag}")
-        print("=" * 70)
-        # Print last notifications
-        print("\n=== Notifications (last 10) ===")
-        if not self.notifications:
-            print("No notifications.")
-        else:
-            for note in self.notifications:
-                print(note)
-        print("=" * 70)
-
-    async def display_ascii_table(self):
-        while True:
-            async with self.lock:
-                self.print_ascii_table()
-            await asyncio.sleep(HEARTBEAT_INTERVAL)
-
-    async def start_server(self):
-        server = await asyncio.start_server(
-            self.handle_node, '0.0.0.0', SATELLITE_PORT, ssl=ssl_context
-        )
-        print(f"Satellite listening on port {SATELLITE_PORT}")
-        async with server:
-            await server.serve_forever()
-
-# ----------------------------
-# Main
-# ----------------------------
 async def main():
-    satellite = Satellite()
-    for _ in range(MAX_CONCURRENT_REPAIRS):
-        asyncio.create_task(satellite.repair_worker())
-    asyncio.create_task(satellite.display_ascii_table())
-    await satellite.start_server()
+    try:
+        await start_server()
+    except KeyboardInterrupt:
+        print("\nSatellite shutting down.")
 
 if __name__ == "__main__":
     asyncio.run(main())
