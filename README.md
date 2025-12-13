@@ -44,4 +44,72 @@
 
 ## Architecture
 
+    +------------------+       +------------------+
+    |     Node         | <-->  |    Satellite     |
+    | - Stores fragments|      | - Fragment map   |
+    | - Reports metrics|      | - Assigns jobs   |
+    +------------------+       +------------------+
+               \                     ^
+                \                    |
+                 \                +------------------+
+                  \--------------> |   Repair Node    |
+                                  | - Reconstructs   |
+                                  |   missing data   |
+                                  +------------------+
 
+---
+
+## Getting Started
+
+### Prerequisites
+- Python 3.11+
+- TLS certificates
+- Disk with sufficient free space
+
+### Running a Node
+
+    python node.py
+
+- Headless by default
+- Attach locally or via SSH for interactive control
+- ASCII UI shows metrics, ranks, space, and alerts
+
+### Running a Satellite
+
+    python satellite.py
+
+- Coordinates fragment placement
+- Maintains metadata map
+- Assigns repair jobs
+
+### Running a Repair Node
+
+    python repair.py
+
+- Connects to satellites to fetch repair jobs
+- Reconstructs missing fragments
+
+---
+
+## Configuration
+- Mode (`node`, `satellite`, `repair`) set in config file
+- Node space limit and bandwidth limits
+- TLS certificates and keys
+- Satellite origin IP for bootstrap
+
+---
+
+## License
+
+LibreMesh is licensed under **GNU AGPLv3**.  
+- All modifications and deployments, including networked services, must remain open-source.  
+- Commercial use or proprietary forks are not allowed.  
+
+---
+
+## Contributing
+
+- Metrics improvements
+- Repair algorithms
+- Monitoring / UI improvements
+- Documentation and tutorials
