@@ -6,9 +6,8 @@ from datetime import datetime
 
 HOST = "0.0.0.0"
 PORT = 4001
-REPAIR_PROCESS_DELAY = 10  # seconds per fragment
+REPAIR_PROCESS_DELAY = 10  # slowed down for visible queue
 
-# Create TLS context
 ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
 if not os.path.exists("cert.pem") or not os.path.exists("key.pem"):
     print("TLS cert/key not found, generating self-signed certificate...")
@@ -48,14 +47,11 @@ if not os.path.exists("cert.pem") or not os.path.exists("key.pem"):
 
 ssl_context.load_cert_chain(certfile="cert.pem", keyfile="key.pem")
 
-# Node registry and repair queue
 nodes = {}
 repair_queue = asyncio.Queue()
 notifications = []
-
 MAX_NOTIFICATIONS = 10
 
-# Utility functions
 def add_notification(msg):
     timestamp = datetime.now().strftime("%H:%M:%S")
     notifications.append(f"{timestamp} - {msg}")
@@ -68,14 +64,14 @@ def print_table():
     if repair_queue.empty():
         print("No repair jobs queued.")
     else:
-        print(f"{repair_queue.qsize()} job(s) queued.")
+        for idx, item in enumerate(list(repair_queue._queue)):
+            print(f"{idx+1}. {item}")
     print("="*70)
     print("=== Notifications (last 10) ===")
     for note in notifications:
         print(note)
     print("="*70)
 
-# Repair worker
 async def repair_worker():
     while True:
         frag = await repair_queue.get()
@@ -84,7 +80,6 @@ async def repair_worker():
         await asyncio.sleep(REPAIR_PROCESS_DELAY)
         repair_queue.task_done()
 
-# Handle node connection
 async def handle_node(reader, writer):
     addr = writer.get_extra_info('peername')
     add_notification(f"Node connected: {addr}")
@@ -108,7 +103,6 @@ async def handle_node(reader, writer):
     add_notification(f"Node disconnected: {addr}")
     print_table()
 
-# Main server
 async def start_server():
     server = await asyncio.start_server(handle_node, HOST, PORT, ssl=ssl_context)
     add_notification(f"Satellite listening on port {PORT}")
