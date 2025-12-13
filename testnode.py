@@ -3,6 +3,7 @@ import ssl
 import os
 import time
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives import serialization  # <--- needed
 
 HOST = "127.0.0.1"
 PORT = 4001
