@@ -16,14 +16,17 @@ ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
 ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
 
+start_time = time.time()  # track node start
+
 async def send_heartbeat(writer):
     while True:
+        uptime = int(time.time() - start_time)  # real uptime in seconds
         message = {
             "type": "heartbeat",
             "node_id": NODE_ID,
             "region": REGION,
             "rank": random.randint(80, 100),
-            "uptime": int(time.time()) % 10000,
+            "uptime": uptime,
             "timestamp": int(time.time()),
             "fragments": FRAGMENTS
         }
