@@ -1,45 +1,33 @@
 import asyncio
-import ssl
-import socket
+import random
 import time
 
-SAT_HOST = "127.0.0.1"
-SAT_PORT = 4001
-NODE_ID = "node_test"
-REGION = "EU"
-FRAGMENTS = [f"frag{i}" for i in range(1,6)]
+# Simulate a node interacting with the satellite
 
-ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-ssl_context.check_hostname = False
-ssl_context.verify_mode = ssl.CERT_NONE
+async def send_repair_request(writer, fragment):
+    message = f"repair {fragment}\n"
+    writer.write(message.encode())
+    await writer.drain()
 
-uptime_start = time.time()
+async def node_communication():
+    reader, writer = await asyncio.open_connection('127.0.0.1', 4001)
 
-async def node_client():
-    reader, writer = await asyncio.open_connection(SAT_HOST, SAT_PORT, ssl=ssl_context)
-    addr = writer.get_extra_info("sockname")
-    print(f"Connected to satellite from {addr}")
+    # Simulate some random fragments being repaired
+    for _ in range(5):
+        fragment = f"frag{random.randint(1, 5)}"
+        await send_repair_request(writer, fragment)
+        print(f"Repair request sent for {fragment}")
+        await asyncio.sleep(2)  # Wait 2 seconds between requests
 
-    try:
-        while True:
-            uptime = int(time.time() - uptime_start)
-            heartbeat = f"{NODE_ID}|{REGION}|{uptime}|{','.join(FRAGMENTS)}"
-            writer.write(heartbeat.encode())
-            await writer.drain()
-            await asyncio.sleep(5)  # send heartbeat every 5 seconds
+    # Simulate disconnection
+    writer.write(b"disconnect\n")
+    await writer.drain()
+    writer.close()
+    await writer.wait_closed()
+    print("Node disconnected")
 
-            # Read satellite messages if any (for demo/testing)
-            try:
-                data = await asyncio.wait_for(reader.read(100), timeout=0.1)
-                if data:
-                    print(f"Received from satellite: {data.decode()}")
-            except asyncio.TimeoutError:
-                pass
-    except KeyboardInterrupt:
-        print("\nNode shutting down...")
-    finally:
-        writer.close()
-        await writer.wait_closed()
+async def main():
+    await node_communication()
 
 if __name__ == "__main__":
-    asyncio.run(node_client())
+    asyncio.run(main())
