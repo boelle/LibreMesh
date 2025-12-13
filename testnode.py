@@ -1,6 +1,7 @@
 import asyncio
 import time
 import json
+import ssl
 
 NODE_ID = "node_test"
 FRAGMENTS = ["frag1", "frag2", "frag3", "frag4", "frag5"]
@@ -23,7 +24,14 @@ async def send_heartbeat(writer, start_time):
         await asyncio.sleep(HEARTBEAT_INTERVAL)
 
 async def node_communication():
-    reader, writer = await asyncio.open_connection(SATELLITE_HOST, SATELLITE_PORT)
+    ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+
+    reader, writer = await asyncio.open_connection(
+        SATELLITE_HOST, SATELLITE_PORT, ssl=ssl_context
+    )
+
     start_time = time.time()
 
     # Start heartbeat task
@@ -32,7 +40,7 @@ async def node_communication():
     # Send repair requests for all fragments
     for fragment in FRAGMENTS:
         await send_repair_request(writer, fragment)
-        await asyncio.sleep(1)  # slight delay to stagger requests
+        await asyncio.sleep(1)  # stagger requests
 
     # Keep connection open
     while True:
