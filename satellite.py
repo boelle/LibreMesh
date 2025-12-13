@@ -2,86 +2,93 @@ import asyncio
 import ssl
 import os
 import time
+import socket
 from collections import deque
 
 PORT = 4001
-REPAIR_DELAY = 10  # seconds
-
-# ---------------------------------------------------------------------
-# TLS setup
-# ---------------------------------------------------------------------
 CERT_FILE = "cert.pem"
 KEY_FILE = "key.pem"
 
-if not os.path.exists(CERT_FILE) or not os.path.exists(KEY_FILE):
-    print("TLS cert/key not found, generating self-signed certificate...")
-    os.system(
-        "openssl req -x509 -newkey rsa:2048 -nodes "
-        "-keyout key.pem -out cert.pem -days 365 "
-        "-subj '/CN=libremesh-satellite'"
-    )
-
-ssl_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-ssl_ctx.load_cert_chain(certfile=CERT_FILE, keyfile=KEY_FILE)
-
-# ---------------------------------------------------------------------
-# State
-# ---------------------------------------------------------------------
-connected_nodes = {}
+# ---- state ----
+nodes = {}
 repair_queue = deque()
+repair_state = {}  # frag -> queued | repairing | done
 notifications = deque(maxlen=10)
 
-start_time = time.time()
+# ---- helpers ----
+def notify(msg):
+    ts = time.strftime("%H:%M:%S")
+    notifications.append(f"{ts} - {msg}")
 
-# ---------------------------------------------------------------------
-# UI
-# ---------------------------------------------------------------------
 def clear_screen():
-    os.system("clear")
+    print("\033[2J\033[H", end="")
 
-def uptime_seconds():
-    return int(time.time() - start_time)
-
-def render():
+def render_table():
     clear_screen()
-
     print("=== Satellite Node Status ===")
     print("Node ID         Region     Rank  Uptime     Fragments")
-    print("----------------------------------------------------------------------")
-    for nid, n in connected_nodes.items():
-        print(
-            f"{nid:<15} {n['region']:<10} {n['rank']:<4} "
-            f"{uptime_seconds():<10} {','.join(n['fragments'])}"
-        )
-    print()
+    print("-" * 70)
 
-    print("=== Repair Queue ===")
-    if repair_queue:
+    now = time.time()
+    for node_id, n in nodes.items():
+        uptime = int(now - n["start"])
+        frags = ",".join(n["fragments"])
+        print(f"{node_id:<15} {n['region']:<9} {n['rank']:<5} {uptime:<10} {frags}")
+
+    print("\n=== Repair Queue ===")
+    if not repair_queue:
+        print("No repair jobs queued.")
+    else:
         for i, frag in enumerate(repair_queue, 1):
             print(f"{i}. {frag}")
-    else:
-        print("No repair jobs queued.")
-    print("======================================================================")
-    print()
-    print("=== Notifications (last 10) ===")
+
+    print("=" * 70)
+    print("\n=== Notifications (last 10) ===")
     for n in notifications:
         print(n)
-    print("======================================================================")
+    print("=" * 70)
 
-# ---------------------------------------------------------------------
-# Network handlers
-# ---------------------------------------------------------------------
+# ---- TLS ----
+def ensure_cert():
+    if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
+        return
+    notify("Generating self-signed TLS certificate")
+    os.system(
+        f"openssl req -x509 -newkey rsa:2048 -keyout {KEY_FILE} "
+        f"-out {CERT_FILE} -days 365 -nodes -subj '/CN=LibreMesh'"
+    )
+
+# ---- repair worker ----
+async def repair_worker():
+    while True:
+        if repair_queue:
+            frag = repair_queue.popleft()
+            repair_state[frag] = "repairing"
+            notify(f"Processing repair for fragment {frag}")
+            render_table()
+
+            await asyncio.sleep(10)  # slow on purpose
+
+            repair_state[frag] = "done"
+            notify(f"Repair completed for fragment {frag}")
+            render_table()
+
+        await asyncio.sleep(1)
+
+# ---- node handler ----
 async def handle_node(reader, writer):
     addr = writer.get_extra_info("peername")
     node_id = f"node{addr[1]}"
 
-    connected_nodes[node_id] = {
+    nodes[node_id] = {
         "region": "EU",
         "rank": 85,
+        "start": time.time(),
         "fragments": []
     }
 
-    notifications.append(f"{time.strftime('%H:%M:%S')} - Node connected: {addr}")
+    notify(f"Node connected: {addr}")
+    render_table()
 
     try:
         while True:
@@ -90,57 +97,45 @@ async def handle_node(reader, writer):
                 break
 
             msg = data.decode().strip()
-
             if msg.startswith("FRAG"):
-                frag = msg.split()[1]
-                connected_nodes[node_id]["fragments"].append(frag)
-                repair_queue.append(frag)
-                notifications.append(
-                    f"{time.strftime('%H:%M:%S')} - Repair job queued for fragment {frag}"
-                )
+                _, frag = msg.split()
+                nodes[node_id]["fragments"].append(frag)
 
-            render()
+                if frag not in repair_state:
+                    repair_state[frag] = "queued"
+                    repair_queue.append(frag)
+                    notify(f"Repair job queued for fragment {frag}")
+                    render_table()
+
     finally:
-        connected_nodes.pop(node_id, None)
-        notifications.append(f"{time.strftime('%H:%M:%S')} - Node disconnected: {addr}")
-        render()
+        notify(f"Node disconnected: {addr}")
+        nodes.pop(node_id, None)
+        render_table()
         writer.close()
         await writer.wait_closed()
 
-# ---------------------------------------------------------------------
-# Repair worker
-# ---------------------------------------------------------------------
-async def repair_worker():
-    while True:
-        if repair_queue:
-            frag = repair_queue.popleft()
-            notifications.append(
-                f"{time.strftime('%H:%M:%S')} - Processing repair for fragment {frag}"
-            )
-            render()
-            await asyncio.sleep(REPAIR_DELAY)
-        await asyncio.sleep(1)
-
-# ---------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------
+# ---- main ----
 async def main():
+    ensure_cert()
+
+    ssl_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    ssl_ctx.load_cert_chain(CERT_FILE, KEY_FILE)
+
     server = await asyncio.start_server(
         handle_node,
         host="0.0.0.0",
         port=PORT,
-        ssl=ssl_ctx   # <-- FIX IS HERE
+        ssl=ssl_ctx
     )
 
-    notifications.append(f"{time.strftime('%H:%M:%S')} - Satellite listening on port {PORT}")
-    notifications.append(f"{time.strftime('%H:%M:%S')} - Hostname: {os.uname().nodename}")
-    render()
+    notify(f"Satellite listening on port {PORT}")
+    notify(f"Hostname: {socket.gethostname()}")
+    render_table()
+
+    asyncio.create_task(repair_worker())
 
     async with server:
-        await asyncio.gather(
-            server.serve_forever(),
-            repair_worker()
-        )
+        await server.serve_forever()
 
 if __name__ == "__main__":
     asyncio.run(main())
