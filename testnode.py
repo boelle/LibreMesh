@@ -1,63 +1,58 @@
+#!/usr/bin/env python3
 import asyncio
-import time
-import json
 import ssl
+import random
+import time
 
-NODE_ID = "node_test"
+SAT_HOST = "127.0.0.1"
+SAT_PORT = 4001
+
+NODE_ID = f"node{random.randint(10000,99999)}"
+REGION = "EU"
 FRAGMENTS = ["frag1", "frag2", "frag3", "frag4", "frag5"]
-SATELLITE_HOST = "127.0.0.1"
-SATELLITE_PORT = 4001
-HEARTBEAT_INTERVAL = 5  # seconds
-
-async def send_repair_request(writer, fragment):
-    message = json.dumps({"type": "repair_request", "node_id": NODE_ID, "fragment": fragment})
-    writer.write(message.encode() + b"\n")
-    await writer.drain()
-    print(f"Repair request sent for {fragment}")
-
-async def send_heartbeat(writer, start_time):
-    while True:
-        uptime = int(time.time() - start_time)
-        heartbeat = json.dumps({"type": "heartbeat", "node_id": NODE_ID, "uptime": uptime})
-        writer.write(heartbeat.encode() + b"\n")
-        await writer.drain()
-        await asyncio.sleep(HEARTBEAT_INTERVAL)
-
-async def node_communication():
-    ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
-
-    reader, writer = await asyncio.open_connection(
-        SATELLITE_HOST, SATELLITE_PORT, ssl=ssl_context
-    )
-
-    start_time = time.time()
-
-    # Start heartbeat task
-    asyncio.create_task(send_heartbeat(writer, start_time))
-
-    # Send repair requests for all fragments
-    for fragment in FRAGMENTS:
-        await send_repair_request(writer, fragment)
-        await asyncio.sleep(1)  # stagger requests
-
-    # Keep connection open
-    while True:
-        line = await reader.readline()
-        if not line:
-            print("Connection closed by satellite")
-            break
-        data = line.decode().strip()
-        print(f"Satellite message: {data}")
 
 async def main():
-    try:
-        await node_communication()
-    except ConnectionResetError:
-        print("Connection lost, retry later")
-    except KeyboardInterrupt:
-        print("Node stopped by user")
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+
+    while True:
+        try:
+            reader, writer = await asyncio.open_connection(
+                SAT_HOST, SAT_PORT, ssl=ssl_ctx
+            )
+
+            # HELLO
+            hello = f"HELLO {NODE_ID} {REGION} {','.join(FRAGMENTS)}\n"
+            writer.write(hello.encode())
+            await writer.drain()
+
+            # Start heartbeat task
+            asyncio.create_task(send_heartbeats(writer))
+
+            # Send some repair requests slowly
+            for frag in FRAGMENTS:
+                await asyncio.sleep(2)
+                msg = f"REPAIR {frag}\n"
+                writer.write(msg.encode())
+                await writer.drain()
+
+            # Keep connection alive forever
+            while True:
+                await asyncio.sleep(10)
+
+        except Exception as e:
+            print("Connection lost, retry later")
+            await asyncio.sleep(5)
+
+async def send_heartbeats(writer):
+    while True:
+        await asyncio.sleep(1)
+        try:
+            writer.write(b"HEARTBEAT\n")
+            await writer.drain()
+        except:
+            break
 
 if __name__ == "__main__":
     asyncio.run(main())
