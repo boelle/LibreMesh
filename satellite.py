@@ -1,16 +1,11 @@
 import asyncio
-import os
 import ssl
-import socket
-import time
-from datetime import datetime
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from cryptography.hazmat.primitives import serialization
+import os
+import datetime
 
-CERTFILE = "cert.pem"
-KEYFILE = "key.pem"
 PORT = 4001
-REPAIR_DELAY = 10  # seconds
+CERT_FILE = "cert.pem"
+KEY_FILE = "key.pem"
 
 connected_nodes = {}
 repair_queue = []
@@ -18,116 +13,109 @@ notifications = []
 
 MAX_NOTIFICATIONS = 10
 
-def log_notification(msg):
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    notifications.append(f"{timestamp} - {msg}")
+# Ensure TLS certificate exists
+if not os.path.exists(CERT_FILE) or not os.path.exists(KEY_FILE):
+    print("TLS cert/key not found, generating self-signed certificate...")
+    os.system(f"openssl req -x509 -newkey rsa:2048 -nodes -keyout {KEY_FILE} -out {CERT_FILE} -days 365 -subj '/CN=localhost'")
+
+ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+ssl_context.load_cert_chain(certfile=CERT_FILE, keyfile=KEY_FILE)
+
+def add_notification(message):
+    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+    notifications.append(f"{timestamp} - {message}")
     if len(notifications) > MAX_NOTIFICATIONS:
         notifications.pop(0)
 
 def print_table():
-    os.system("clear")
+    os.system('clear')
     print("=== Satellite Node Status ===")
     print("Node ID         Region     Rank  Uptime     Fragments")
     print("----------------------------------------------------------------------")
-    for node_id, info in connected_nodes.items():
-        fragments = ",".join(info["fragments"])
-        print(f"{node_id:<15}{info['region']:<10}{info['rank']:<6}{info['uptime']:<10}{fragments}")
+    for node_id, node_info in connected_nodes.items():
+        fragments_str = ",".join(node_info["fragments"])
+        print(f"{node_id:<15}{node_info['region']:<10}{node_info['rank']:<6}{node_info['uptime']:<10}{fragments_str}")
     print("\n=== Repair Queue ===")
     if repair_queue:
-        for i, frag in enumerate(repair_queue, 1):
-            print(f"{i}. {frag}")
+        for idx, frag in enumerate(repair_queue, 1):
+            print(f"{idx}. {frag}")
     else:
         print("No repair jobs queued.")
-    print("="*70)
+    print("======================================================================")
     print("\n=== Notifications (last 10) ===")
-    for n in notifications:
-        print(n)
-    print("="*70)
-
-async def process_repair_queue():
-    while True:
-        if repair_queue:
-            frag = repair_queue.pop(0)
-            log_notification(f"Processing repair for fragment {frag}")
-            print_table()
-            await asyncio.sleep(REPAIR_DELAY)
-        else:
-            await asyncio.sleep(1)
+    for note in notifications:
+        print(note)
+    print("======================================================================")
 
 async def handle_node(reader, writer):
     addr = writer.get_extra_info('peername')
-    log_notification(f"Node connected: {addr}")
-
-    # Add node with default info
+    add_notification(f"Node connected: {addr}")
     node_id = f"node{addr[1]}"
     connected_nodes[node_id] = {
         "region": "EU",
         "rank": 85,
         "uptime": 0,
-        "fragments": [f"frag{i}" for i in range(1,6)],
-        "public_key": None  # Placeholder
+        "fragments": [f"frag{i}" for i in range(1, 6)]
     }
-
     print_table()
-
     try:
         while True:
-            data = await reader.read(1024)
+            data = await reader.readline()
             if not data:
                 break
-
-            if data.startswith(b"REPAIR:"):
-                frag = data.decode().split(":")[1]
-                repair_queue.append(frag)
-                log_notification(f"Repair job queued for fragment {frag}")
-
-            elif data.startswith(b"HEARTBEAT:"):
-                parts = data.split(b"|")
-                heartbeat_data = parts[0].decode()
-                signature = parts[1]
-                # TODO: Verify signature here if public key is known
-                _, hb_node_id, region, uptime = heartbeat_data.split(":")
-                uptime = int(uptime)
-                if hb_node_id in connected_nodes:
-                    connected_nodes[hb_node_id]["uptime"] = uptime
-                else:
-                    connected_nodes[hb_node_id] = {
+            message = data.decode().strip()
+            if message.startswith("HEARTBEAT"):
+                parts = message.split(":")
+                node_id = parts[1]
+                region = parts[2]
+                uptime = int(parts[3])
+                if node_id not in connected_nodes:
+                    connected_nodes[node_id] = {
                         "region": region,
                         "rank": 85,
                         "uptime": uptime,
-                        "fragments": [],
-                        "public_key": None
+                        "fragments": [f"frag{i}" for i in range(1,6)]
                     }
-
-            print_table()
-
+                else:
+                    connected_nodes[node_id]["uptime"] = uptime
+                    connected_nodes[node_id]["region"] = region
+                print_table()
+            elif message.startswith("REPAIR_REQUEST"):
+                frag = message.split(":")[1]
+                repair_queue.append(frag)
+                add_notification(f"Repair job queued for fragment {frag}")
+                print_table()
     except Exception as e:
-        log_notification(f"Node error: {e}")
-
+        add_notification(f"Error with node {addr}: {e}")
     finally:
-        log_notification(f"Node disconnected: {addr}")
+        add_notification(f"Node disconnected: {addr}")
         connected_nodes.pop(node_id, None)
         print_table()
         writer.close()
         await writer.wait_closed()
 
+async def repair_worker():
+    while True:
+        if repair_queue:
+            frag = repair_queue.pop(0)
+            add_notification(f"Processing repair for fragment {frag}")
+            print_table()
+            await asyncio.sleep(10)  # slow repair so you can see it
+        else:
+            await asyncio.sleep(1)
+
 async def start_server():
-    if not os.path.exists(CERTFILE) or not os.path.exists(KEYFILE):
-        print("TLS cert/key not found, generating self-signed certificate...")
-        os.system(f"openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout {KEYFILE} -out {CERTFILE} -subj '/CN=localhost'")
-
-    ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-    ssl_context.load_cert_chain(certfile=CERTFILE, keyfile=KEYFILE)
-
     server = await asyncio.start_server(handle_node, '0.0.0.0', PORT, ssl=ssl_context)
-    log_notification(f"Satellite listening on port {PORT}")
+    add_notification(f"Satellite listening on port {PORT}")
     print_table()
-
     async with server:
-        await asyncio.gather(server.serve_forever(), process_repair_queue())
+        await asyncio.gather(server.serve_forever(), repair_worker())
 
 async def main():
     await start_server()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nSatellite shutting down.")
