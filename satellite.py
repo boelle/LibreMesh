@@ -3,15 +3,15 @@ import json
 import ssl
 import os
 import subprocess
-import time
 from typing import Dict, List
 
 # ----------------------------
 # Config / constants
 # ----------------------------
 SATELLITE_PORT = 4001
-HEARTBEAT_INTERVAL = 5  # seconds for quick display updates
+HEARTBEAT_INTERVAL = 5  # seconds for table updates
 MAX_CONCURRENT_REPAIRS = 5
+MAX_NOTIFICATIONS = 10
 
 CERT_FILE = "cert.pem"
 KEY_FILE = "key.pem"
@@ -57,11 +57,12 @@ class Satellite:
         self.nodes: Dict[str, NodeInfo] = {}
         self.fragments: Dict[str, FragmentInfo] = {}
         self.repair_queue: asyncio.Queue = asyncio.Queue()
+        self.notifications: List[str] = []
         self.lock = asyncio.Lock()
 
     async def handle_node(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         addr = writer.get_extra_info('peername')
-        print(f"Node connected: {addr}")
+        self.add_notification(f"Node connected: {addr}")
         try:
             while True:
                 data = await reader.readline()
@@ -70,7 +71,7 @@ class Satellite:
                 message = json.loads(data.decode())
                 await self.process_message(message, writer)
         except Exception as e:
-            print(f"Error with node {addr}: {e}")
+            self.add_notification(f"Error with node {addr}: {e}")
         finally:
             writer.close()
             await writer.wait_closed()
@@ -97,18 +98,21 @@ class Satellite:
         fragment_id = message["fragment_id"]
         async with self.lock:
             await self.repair_queue.put(fragment_id)
-            print(f"Repair job queued for fragment {fragment_id}")
+            self.add_notification(f"Repair job queued for fragment {fragment_id}")
 
     async def repair_worker(self):
         while True:
             fragment_id = await self.repair_queue.get()
-            print(f"Processing repair for fragment {fragment_id}")
-            # placeholder: assign repair to repair nodes
-            await asyncio.sleep(0.1)
+            self.add_notification(f"Processing repair for fragment {fragment_id}")
+            await asyncio.sleep(0.1)  # placeholder for repair logic
             self.repair_queue.task_done()
 
+    def add_notification(self, msg: str):
+        self.notifications.append(msg)
+        if len(self.notifications) > MAX_NOTIFICATIONS:
+            self.notifications.pop(0)
+
     def print_ascii_table(self):
-        # Clear screen
         os.system('cls' if os.name == 'nt' else 'clear')
         print("\n=== Satellite Node Status ===")
         if not self.nodes:
@@ -120,7 +124,6 @@ class Satellite:
                 uptime_str = str(node.uptime)
                 fragments_str = ",".join(node.fragments)
                 print(f"{node.node_id:<15} {node.region:<10} {node.rank:<5} {uptime_str:<10} {fragments_str:<20}")
-        # Repair queue info
         print("\n=== Repair Queue ===")
         if self.repair_queue.empty():
             print("No repair jobs queued.")
@@ -128,6 +131,14 @@ class Satellite:
             queued = list(self.repair_queue._queue)
             for frag in queued:
                 print(f"Fragment: {frag}")
+        print("=" * 70)
+        # Print last notifications
+        print("\n=== Notifications (last 10) ===")
+        if not self.notifications:
+            print("No notifications.")
+        else:
+            for note in self.notifications:
+                print(note)
         print("=" * 70)
 
     async def display_ascii_table(self):
@@ -151,7 +162,6 @@ async def main():
     satellite = Satellite()
     for _ in range(MAX_CONCURRENT_REPAIRS):
         asyncio.create_task(satellite.repair_worker())
-    # Show table immediately and continuously
     asyncio.create_task(satellite.display_ascii_table())
     await satellite.start_server()
 
