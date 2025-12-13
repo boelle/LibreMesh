@@ -10,8 +10,7 @@ from typing import Dict, List
 # Config / constants
 # ----------------------------
 SATELLITE_PORT = 4001
-METADATA_FILE = "metadata.json"
-HEARTBEAT_INTERVAL = 30  # seconds
+HEARTBEAT_INTERVAL = 5  # seconds for quick display updates
 MAX_CONCURRENT_REPAIRS = 5
 
 CERT_FILE = "cert.pem"
@@ -108,21 +107,34 @@ class Satellite:
             await asyncio.sleep(0.1)
             self.repair_queue.task_done()
 
+    def print_ascii_table(self):
+        # Clear screen
+        os.system('cls' if os.name == 'nt' else 'clear')
+        print("\n=== Satellite Node Status ===")
+        if not self.nodes:
+            print("No nodes connected.")
+        else:
+            print(f"{'Node ID':<15} {'Region':<10} {'Rank':<5} {'Uptime':<10} {'Fragments':<20}")
+            print("-" * 70)
+            for node in self.nodes.values():
+                uptime_str = str(node.uptime)
+                fragments_str = ",".join(node.fragments)
+                print(f"{node.node_id:<15} {node.region:<10} {node.rank:<5} {uptime_str:<10} {fragments_str:<20}")
+        # Repair queue info
+        print("\n=== Repair Queue ===")
+        if self.repair_queue.empty():
+            print("No repair jobs queued.")
+        else:
+            queued = list(self.repair_queue._queue)
+            for frag in queued:
+                print(f"Fragment: {frag}")
+        print("=" * 70)
+
     async def display_ascii_table(self):
         while True:
-            await asyncio.sleep(HEARTBEAT_INTERVAL)
             async with self.lock:
-                print("\n=== Satellite Node Status ===")
-                if not self.nodes:
-                    print("No nodes connected.")
-                else:
-                    print(f"{'Node ID':<15} {'Region':<10} {'Rank':<5} {'Uptime':<10} {'Fragments':<20}")
-                    print("-" * 70)
-                    for node in self.nodes.values():
-                        uptime_str = str(node.uptime)
-                        fragments_str = ",".join(node.fragments)
-                        print(f"{node.node_id:<15} {node.region:<10} {node.rank:<5} {uptime_str:<10} {fragments_str:<20}")
-                print("=" * 70)
+                self.print_ascii_table()
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
 
     async def start_server(self):
         server = await asyncio.start_server(
@@ -139,6 +151,7 @@ async def main():
     satellite = Satellite()
     for _ in range(MAX_CONCURRENT_REPAIRS):
         asyncio.create_task(satellite.repair_worker())
+    # Show table immediately and continuously
     asyncio.create_task(satellite.display_ascii_table())
     await satellite.start_server()
 
