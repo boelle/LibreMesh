@@ -1,95 +1,176 @@
+#!/usr/bin/env python3
+
 import asyncio
 import ssl
 import os
-import datetime
+import subprocess
+import time
+import socket
+from collections import deque
 
 PORT = 4001
-repair_queue = []
-notifications = []
-connected_nodes = []
-in_progress = set()
+CERT_FILE = "cert.pem"
+KEY_FILE = "key.pem"
 
-# Display table
-def display_table():
-    os.system('clear')
+REPAIR_DELAY = 10  # seconds
+MAX_NOTIFICATIONS = 10
+
+# -------------------- TLS --------------------
+
+def ensure_tls_cert():
+    if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
+        return
+
+    print("TLS cert/key not found, generating self-signed certificate...")
+    subprocess.run([
+        "openssl", "req", "-x509", "-newkey", "rsa:4096",
+        "-keyout", KEY_FILE, "-out", CERT_FILE,
+        "-days", "365", "-nodes",
+        "-subj", "/CN=LibreMesh-Satellite"
+    ], check=True)
+
+# -------------------- Satellite State --------------------
+
+class SatelliteState:
+    def __init__(self):
+        self.nodes = {}  # node_id -> info
+        self.connected = set()
+        self.repair_queue = asyncio.Queue()
+        self.repairs_in_progress = set()
+        self.lost_fragments = set()
+        self.notifications = deque(maxlen=MAX_NOTIFICATIONS)
+        self.start_time = time.time()
+
+    def notify(self, msg):
+        ts = time.strftime("%H:%M:%S")
+        self.notifications.append(f"{ts} - {msg}")
+
+state = SatelliteState()
+
+# -------------------- UI --------------------
+
+def clear_screen():
+    os.system("clear")
+
+def render_ui():
+    clear_screen()
     print("=== Satellite Node Status ===")
     print("Node ID         Region     Rank  Uptime     Fragments")
-    print("----------------------------------------------------------------------")
-    for node in connected_nodes:
-        print(f"{node['id']}      {node['region']}        {node['rank']}    {node['uptime']}        {','.join(node['fragments'])}")
+    print("-" * 70)
+
+    now = int(time.time())
+    for node_id, info in state.nodes.items():
+        uptime = now - info["connected_at"]
+        frags = ",".join(info["fragments"])
+        print(f"{node_id:<15} {info['region']:<10} {info['rank']:<5} {uptime:<10} {frags}")
+
     print("\n=== Repair Queue ===")
-    if repair_queue:
-        for i, frag in enumerate(repair_queue, 1):
-            print(f"{i}. {frag}")
-    else:
+    if state.repair_queue.empty():
         print("No repair jobs queued.")
-    print("======================================================================")
+    else:
+        q = list(state.repair_queue._queue)
+        for i, frag in enumerate(q, 1):
+            print(f"{i}. {frag}")
+
+    print("=" * 70)
     print("\n=== Notifications (last 10) ===")
-    for n in notifications[-10:]:
+    for n in state.notifications:
         print(n)
-    print("======================================================================")
+    print("=" * 70)
 
-def add_notification(msg):
-    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-    notifications.append(f"{timestamp} - {msg}")
-    display_table()
+# -------------------- Repair Worker --------------------
 
-async def process_repair(frag):
-    await asyncio.sleep(10)  # slow down repair
-    add_notification(f"Processing repair for fragment {frag}")
-    if frag in repair_queue:
-        repair_queue.remove(frag)
-    in_progress.remove(frag)
-    display_table()
+async def repair_worker():
+    while True:
+        frag = await state.repair_queue.get()
+
+        if frag not in state.lost_fragments:
+            state.repair_queue.task_done()
+            continue
+
+        state.repairs_in_progress.add(frag)
+        state.notify(f"Processing repair for fragment {frag}")
+        render_ui()
+
+        await asyncio.sleep(REPAIR_DELAY)
+
+        state.lost_fragments.discard(frag)
+        state.repairs_in_progress.discard(frag)
+
+        state.notify(f"Repair completed for fragment {frag}")
+        render_ui()
+
+        state.repair_queue.task_done()
+
+# -------------------- Network --------------------
 
 async def handle_node(reader, writer):
-    addr = writer.get_extra_info('peername')
-    add_notification(f"Node connected: {addr}")
-    # Fake node metadata for demo
-    node_info = {
-        'id': f"node_{addr[1]}",
-        'region': "EU",
-        'rank': 85,
-        'uptime': 0,
-        'fragments': [f"frag{i}" for i in range(1,6)]
-    }
-    connected_nodes.append(node_info)
-    display_table()
+    peer = writer.get_extra_info("peername")
+    state.notify(f"Node connected: {peer}")
+    render_ui()
 
     try:
+        data = await reader.readline()
+        msg = data.decode().strip()
+
+        # expected: node_id,region,rank,frag1|frag2|...
+        node_id, region, rank, frag_str = msg.split(",")
+        fragments = frag_str.split("|")
+
+        state.nodes[node_id] = {
+            "region": region,
+            "rank": int(rank),
+            "fragments": fragments,
+            "connected_at": int(time.time())
+        }
+        state.connected.add(node_id)
+
+        # Simulate fragment loss once per fragment
+        for frag in fragments:
+            if frag not in state.lost_fragments and frag not in state.repairs_in_progress:
+                state.lost_fragments.add(frag)
+                await state.repair_queue.put(frag)
+                state.notify(f"Repair job queued for fragment {frag}")
+
+        render_ui()
+
         while True:
-            await asyncio.sleep(5)
-            # increment uptime
-            node_info['uptime'] += 5
-            # enqueue repairs only if not already queued or in progress
-            for frag in node_info['fragments']:
-                if frag not in repair_queue and frag not in in_progress:
-                    repair_queue.append(frag)
-                    add_notification(f"Repair job queued for fragment {frag}")
-                    in_progress.add(frag)
-                    asyncio.create_task(process_repair(frag))
-            display_table()
+            await asyncio.sleep(1)
+
     except asyncio.CancelledError:
         pass
+    except Exception:
+        pass
     finally:
-        add_notification(f"Node disconnected: {addr}")
-        connected_nodes.remove(node_info)
-        display_table()
+        state.notify(f"Node disconnected: {peer}")
+        render_ui()
+        writer.close()
+        await writer.wait_closed()
 
-async def start_server():
-    if not os.path.exists("cert.pem") or not os.path.exists("key.pem"):
-        add_notification("TLS cert/key not found, generating self-signed certificate...")
-        os.system("openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj '/CN=localhost'")
-        add_notification("Generated cert.pem and key.pem")
+# -------------------- Main --------------------
+
+async def main():
+    ensure_tls_cert()
+
     ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-    ssl_context.load_cert_chain(certfile="cert.pem", keyfile="key.pem")
-    server = await asyncio.start_server(handle_node, "0.0.0.0", PORT, ssl=ssl_context)
-    add_notification(f"Satellite listening on port {PORT}")
+    ssl_context.load_cert_chain(CERT_FILE, KEY_FILE)
+
+    hostname = socket.gethostname()
+    state.notify(f"Satellite listening on port {PORT}")
+    state.notify(f"Hostname: {hostname}")
+
+    server = await asyncio.start_server(
+        handle_node, "0.0.0.0", PORT, ssl=ssl_context
+    )
+
+    asyncio.create_task(repair_worker())
+    render_ui()
+
     async with server:
         await server.serve_forever()
 
-async def main():
-    await start_server()
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
