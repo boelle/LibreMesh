@@ -1,30 +1,42 @@
 import asyncio
+import ssl
 import random
 import time
 
-# Simulate a node interacting with the satellite
+SATELLITE_HOST = "127.0.0.1"
+SATELLITE_PORT = 4001
 
-async def send_repair_request(writer, fragment):
-    message = f"repair {fragment}\n"
-    writer.write(message.encode())
-    await writer.drain()
+FRAGMENTS = ["frag1", "frag2", "frag3", "frag4", "frag5"]
 
 async def node_communication():
-    reader, writer = await asyncio.open_connection('127.0.0.1', 4001)
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
 
-    # Simulate some random fragments being repaired
-    for _ in range(5):
-        fragment = f"frag{random.randint(1, 5)}"
-        await send_repair_request(writer, fragment)
-        print(f"Repair request sent for {fragment}")
-        await asyncio.sleep(2)  # Wait 2 seconds between requests
+    reader, writer = await asyncio.open_connection(
+        SATELLITE_HOST,
+        SATELLITE_PORT,
+        ssl=ssl_ctx
+    )
 
-    # Simulate disconnection
-    writer.write(b"disconnect\n")
-    await writer.drain()
-    writer.close()
-    await writer.wait_closed()
-    print("Node disconnected")
+    try:
+        for frag in FRAGMENTS:
+            msg = f"FRAG {frag}\n"
+            writer.write(msg.encode())
+            await writer.drain()
+            print(f"Repair request sent for {frag}")
+            await asyncio.sleep(2)  # slow, visible behavior
+
+        # stay connected so satellite can work
+        while True:
+            await asyncio.sleep(1)
+
+    except (ConnectionResetError, BrokenPipeError):
+        print("Connection closed by satellite")
+
+    finally:
+        writer.close()
+        await writer.wait_closed()
 
 async def main():
     await node_communication()
