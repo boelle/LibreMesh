@@ -20,9 +20,8 @@ MAX_NOTIFICATIONS = 10
 REPAIR_DELAY = 1.0
 MAX_TOTAL_CONNECTIONS = 100
 MAX_PER_IP = 5
-HANDSHAKE_TIMEOUT = 10
 TEMP_BLOCK = 300
-HEARTBEAT_TIMEOUT = 60
+HEARTBEAT_TIMEOUT = 90  # now longer than node heartbeat
 
 @dataclass
 class Node:
@@ -194,11 +193,11 @@ class Satellite:
         try:
             while not reader.at_eof():
                 try:
-                    line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
-                    if not line:
+                    line_bytes = await reader.readline()
+                    if not line_bytes:
                         await asyncio.sleep(0.1)
                         continue
-                    line = line.decode().strip()
+                    line = line_bytes.decode().strip()
                     now = time.time()
                     self.advisory_ips[peer] = SuspiciousIP(ip=peer, last_seen=now, connections=self.ip_connection_count[peer])
 
@@ -218,7 +217,7 @@ class Satellite:
                             n = self.nodes[node_id]
                             try:
                                 n.uptime = int(uptime.strip())
-                            except Exception as e:
+                            except Exception:
                                 self.notify(f"Failed to parse uptime from {line}:\n{traceback.format_exc()}")
                             n.last_seen = time.time()
                             n.writer = writer
@@ -230,7 +229,7 @@ class Satellite:
                         self.notify(f"Repair requested: {fragment} by {node_id}")
                         asyncio.create_task(self.process_repairs())
 
-                except Exception as e:
+                except Exception:
                     self.notify(f"Client error while reading line:\n{traceback.format_exc()}")
                     await asyncio.sleep(0.1)
 
