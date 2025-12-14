@@ -5,17 +5,30 @@ from collections import deque
 import datetime
 import os
 import hashlib
-import psutil  # for CPU load check
+import json
+import base64
+import urllib.request
+import psutil
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes
 
 # ----------------------------
 # Config
 # ----------------------------
-SATELLITE_PORT = 4001
+NODE_PORT = 4001
+SAT_PEER_PORT = 5001
 CERT_FILE = "cert.pem"
 KEY_FILE = "key.pem"
 HEARTBEAT_TIMEOUT = 90
 NOTIFICATION_LIMIT = 10
-MAX_CPU_LOAD = 85  # percent
+MAX_CPU_LOAD = 85
+TRUSTED_LIST_URL = "https://raw.githubusercontent.com/LibreMesh/trusted-satellites/main/list.json"
+
+IS_ORIGIN = True  # Set True if this satellite is the origin
+ORIGIN_PRIVKEY_FILE = "origin_privkey.pem"
+ORIGIN_PUBKEY_FILE = "origin_pubkey.pem"
+TRUSTED_LIST_FILE = "list.json"
 
 # ----------------------------
 # Data models
@@ -36,26 +49,28 @@ class RepairJob:
         self.fragment_id = fragment_id
         self.requested_by = requested_by
         self.timestamp = datetime.datetime.utcnow()
-        self.claimed_by = None  # satellite_id that claims job
+        self.claimed_by = None
 
 # ----------------------------
 # Satellite
 # ----------------------------
 class Satellite:
     def __init__(self):
-        self.nodes = {}  # node_id -> Node
-        self.repair_queue = deque()  # list of RepairJob
+        self.nodes = {}
+        self.repair_queue = deque()
         self.notifications = deque(maxlen=NOTIFICATION_LIMIT)
         self.lock = asyncio.Lock()
         self.satellite_id = None
         self.key_fingerprint = None
+        self.peers = {}  # satellite_id -> (ip, port)
+        self.origin_privkey = None
+        self.origin_pubkey = None
 
     # ------------------------
-    # Terminal UI
+    # UI
     # ------------------------
     def render_ui(self):
         os.system("cls" if os.name == "nt" else "clear")
-
         # Node Status Table
         print("+-------------------------------------------------------------+")
         print("|                     Satellite Node Status                  |")
@@ -96,7 +111,7 @@ class Satellite:
         self.render_ui()
 
     # ------------------------
-    # Node handling
+    # Node Handling
     # ------------------------
     async def process_line(self, line, writer):
         line = line.strip()
@@ -144,7 +159,7 @@ class Satellite:
             self.add_notification(f"Repair requested: {fragment_id} by {node_id}")
 
     # ------------------------
-    # Node connection
+    # Node Connection
     # ------------------------
     async def handle_connection(self, reader, writer):
         addr = writer.get_extra_info("peername")
@@ -162,7 +177,7 @@ class Satellite:
             await writer.wait_closed()
 
     # ------------------------
-    # Repair worker
+    # Repair Worker
     # ------------------------
     async def repair_worker(self):
         while True:
@@ -181,7 +196,7 @@ class Satellite:
         self.add_notification(f"Repair completed: {job.fragment_id}")
 
     # ------------------------
-    # TLS and fingerprint
+    # TLS Keys and Fingerprint
     # ------------------------
     def ensure_tls_keys(self):
         if not Path(CERT_FILE).exists() or not Path(KEY_FILE).exists():
@@ -220,14 +235,77 @@ class Satellite:
             f.write(cert.public_bytes(serialization.Encoding.PEM))
 
     # ------------------------
+    # Trusted List
+    # ------------------------
+    def load_origin_keys(self):
+        if IS_ORIGIN:
+            if not Path(ORIGIN_PRIVKEY_FILE).exists():
+                # generate signing key for origin
+                priv = ed25519.Ed25519PrivateKey.generate()
+                with open(ORIGIN_PRIVKEY_FILE, "wb") as f:
+                    f.write(priv.private_bytes(
+                        encoding=serialization.Encoding.PEM,
+                        format=serialization.PrivateFormat.PKCS8,
+                        encryption_algorithm=serialization.NoEncryption()
+                    ))
+                pub = priv.public_key()
+                with open(ORIGIN_PUBKEY_FILE, "wb") as f:
+                    f.write(pub.public_bytes(
+                        encoding=serialization.Encoding.PEM,
+                        format=serialization.PublicFormat.SubjectPublicKeyInfo
+                    ))
+            with open(ORIGIN_PRIVKEY_FILE, "rb") as f:
+                self.origin_privkey = serialization.load_pem_private_key(f.read(), password=None)
+            with open(ORIGIN_PUBKEY_FILE, "rb") as f:
+                self.origin_pubkey = serialization.load_pem_public_key(f.read())
+        else:
+            with open(ORIGIN_PUBKEY_FILE, "rb") as f:
+                self.origin_pubkey = serialization.load_pem_public_key(f.read())
+
+    def generate_trusted_list(self):
+        if not IS_ORIGIN:
+            return
+        payload = {"version": 1, "satellites": [{"ip": "127.0.0.1", "port": NODE_PORT, "fingerprint": self.key_fingerprint}]}
+        payload_bytes = json.dumps(payload, sort_keys=True).encode()
+        signature = self.origin_privkey.sign(payload_bytes)
+        payload["signature"] = base64.b64encode(signature).decode()
+        with open(TRUSTED_LIST_FILE, "w") as f:
+            json.dump(payload, f, indent=2)
+        self.add_notification(f"Origin created signed trusted list: {TRUSTED_LIST_FILE}")
+        print("Base64 signature for GitHub copy:", payload["signature"])
+
+    def fetch_trusted_list(self):
+        if IS_ORIGIN:
+            return
+        try:
+            with urllib.request.urlopen(TRUSTED_LIST_URL) as resp:
+                data = json.loads(resp.read())
+            signature_b64 = data.pop("signature", None)
+            if not signature_b64:
+                self.add_notification("Trusted list missing signature")
+                return
+            payload_bytes = json.dumps(data, sort_keys=True).encode()
+            signature = base64.b64decode(signature_b64)
+            self.origin_pubkey.verify(signature, payload_bytes)
+            self.add_notification("Trusted list signature verified")
+            for sat in data["satellites"]:
+                self.peers[sat["fingerprint"][:8]] = (sat["ip"], sat["port"])
+        except Exception as e:
+            self.add_notification(f"Failed to fetch/verify trusted list: {e}")
+
+    # ------------------------
     # Server start
     # ------------------------
     async def start_server(self):
         self.ensure_tls_keys()
+        self.load_origin_keys()
+        self.generate_trusted_list()
+        self.fetch_trusted_list()
+
         ssl_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         ssl_ctx.load_cert_chain(certfile=CERT_FILE, keyfile=KEY_FILE)
-        server = await asyncio.start_server(self.handle_connection, "0.0.0.0", SATELLITE_PORT, ssl=ssl_ctx)
-        self.add_notification(f"Satellite listening on port {SATELLITE_PORT}")
+        server = await asyncio.start_server(self.handle_connection, "0.0.0.0", NODE_PORT, ssl=ssl_ctx)
+        self.add_notification(f"Satellite listening on port {NODE_PORT}")
         async with server:
             await server.serve_forever()
 
