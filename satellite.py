@@ -212,13 +212,14 @@ def generate_keys_and_certs():
     with open(CERT_PATH, 'rb') as f:
         cert_data = f.read()
     cert = x509.load_pem_x509_certificate(cert_data, default_backend())
-    # FIX: Access the first element of the list returned by get_attributes_for_oid()
-    SATELLITE_ID = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME).value
+    
+    # NEW FIX: Use a more robust extraction method for common name attributes
+    SATELLITE_ID = [attr.value for attr in cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)][0]
+    
     TLS_FINGERPRINT = cert.fingerprint(hashes.SHA1()).hex(':')
     ADVERTISED_IP = get_local_ip()
     print(f"Satellite ID: {SATELLITE_ID}")
     print(f"TLS Fingerprint: {TLS_FINGERPRINT}")
-    # FIX: Corrected variable name from ADVERTIED_IP to ADVERTISED_IP
     print(f"Advertising IP: {ADVERTISED_IP}")
 
 
