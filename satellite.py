@@ -22,6 +22,8 @@ LISTEN_PORT = 8888
 NODE_TIMEOUT = 60 # seconds
 
 # --- NEW CONFIGURATION VARIABLE ---
+# Uncomment the line below and set your static public/external IP when needed.
+# If left commented, the script will automatically detect the local IP.
 ADVERTISED_IP_CONFIG = '192.168.0.163' 
 # ADVERTISED_IP_CONFIG = None 
 
@@ -121,8 +123,6 @@ def sign_and_save_satellite_list():
     Only runs if IS_ORIGIN is True.
     """
     if not IS_ORIGIN or not ORIGIN_PRIVKEY_PEM:
-        # This function should only be called if IS_ORIGIN is True, 
-        # so this check is a safeguard.
         print("ERROR: Not the origin satellite. Cannot sign list.json.")
         return
 
@@ -165,7 +165,7 @@ def generate_keys_and_certs():
     global ORIGIN_PUBKEY_PEM, ORIGIN_PRIVKEY_PEM, IS_ORIGIN
     print("Checking for existing keys and certificates...")
     
-    # ... (Satellite Cert Generation code omitted for brevity) ...
+    # 1. Generate/Load Satellite TLS Key and Cert
     if not os.path.exists(CERT_PATH) or not os.path.exists(KEY_PATH):
         print("Generating new satellite cert.pem and key.pem...")
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
@@ -182,7 +182,7 @@ def generate_keys_and_certs():
     # 2. Generate/Load Origin Pubkey/Privkey
     if not os.path.exists(ORIGIN_PUBKEY_PATH) or not os.path.exists(ORIGIN_PRIVKEY_PATH):
         print(f"Generating new master origin key pair. THIS INSTANCE IS NOW THE ORIGIN.")
-        IS_ORIGIN = True # We just created it, so we are the origin.
+        IS_ORIGIN = True
         origin_priv_key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
         origin_pub_key = origin_priv_key.public_key()
         ORIGIN_PUBKEY_PEM = origin_pub_key.public_bytes(encoding=serialization.Encoding.PEM, format=serialization.PublicFormat.SubjectPublicKeyInfo)
@@ -199,7 +199,6 @@ def generate_keys_and_certs():
         with open(ORIGIN_PRIVKEY_PATH, "rb") as f:
             ORIGIN_PRIVKEY_PEM = f.read().strip()
         
-        # Check if we have the private key to confirm IS_ORIGIN status
         try:
             serialization.load_pem_private_key(ORIGIN_PRIVKEY_PEM, password=None, backend=default_backend())
             IS_ORIGIN = True
@@ -213,16 +212,18 @@ def generate_keys_and_certs():
     with open(CERT_PATH, 'rb') as f:
         cert_data = f.read()
     cert = x509.load_pem_x509_certificate(cert_data, default_backend())
-    SATELLITE_ID = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME).value
+    # FIX: Access the first element of the list returned by get_attributes_for_oid()
+    SATELLITE_ID = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value # Corrected syntax
     TLS_FINGERPRINT = cert.fingerprint(hashes.SHA1()).hex(':')
     ADVERTISED_IP = get_local_ip()
     print(f"Satellite ID: {SATELLITE_ID}")
     print(f"TLS Fingerprint: {TLS_FINGERPRINT}")
-    print(f"Advertising IP: {ADVERTISED_IP}")
+    print(f"Advertising IP: {ADVERTIED_IP}")
 
 
 # --- Networking/Protocol Classes ---
 class SatelliteProtocol(asyncio.Protocol):
+    # ... (rest of code omitted for brevity) ...
     def __init__(self):
         self.node_id = None
         self.last_seen = time.time()
@@ -271,6 +272,7 @@ class SatelliteProtocol(asyncio.Protocol):
 
 # --- Background Tasks ---
 async def audit_and_queue_repairs():
+    # ... (rest of code omitted for brevity) ...
     while True:
         await asyncio.sleep(45)
         if random.random() > 0.8 and REPAIR_QUEUE.empty():
@@ -285,6 +287,7 @@ async def audit_and_queue_repairs():
             await REPAIR_QUEUE.put(job)
 
 async def repair_worker():
+    # ... (rest of code omitted for brevity) ...
     while True:
         job = await REPAIR_QUEUE.get()
         try:
@@ -298,6 +301,7 @@ async def repair_worker():
             REPAIR_QUEUE.task_done()
 
 async def watchdog_task():
+    # ... (rest of code omitted for brevity) ...
     while True:
         await asyncio.sleep(1)
         current_time = time.time()
@@ -307,6 +311,7 @@ async def watchdog_task():
 
 
 async def display_ui():
+    # ... (rest of code omitted for brevity) ...
     HEADER_WIDTH = 54
     while True:
         sys.stdout.write('\033[H') 
