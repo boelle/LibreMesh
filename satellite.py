@@ -19,9 +19,9 @@ MAX_NOTIFICATIONS = 10
 REPAIR_DELAY = 1.0
 MAX_TOTAL_CONNECTIONS = 100
 MAX_PER_IP = 5
-HANDSHAKE_TIMEOUT = 10  # seconds
-TEMP_BLOCK = 300  # seconds
-HEARTBEAT_TIMEOUT = 60  # seconds
+HANDSHAKE_TIMEOUT = 10
+TEMP_BLOCK = 300
+HEARTBEAT_TIMEOUT = 60
 
 @dataclass
 class Node:
@@ -52,14 +52,11 @@ class Satellite:
         self.sat_id = None
         self.tls_fingerprint = None
 
-        # DoS mitigation
         self.ip_connection_count = defaultdict(int)
         self.blocked_ips: dict[str, SuspiciousIP] = {}
-
-        # Advisory table
         self.advisory_ips: dict[str, SuspiciousIP] = {}
 
-    # ----------------- KEY HANDLING -----------------
+    # ----------------- KEYS -----------------
     def load_or_create_origin_keys(self):
         if os.path.exists(ORIGIN_PRIV):
             with open(ORIGIN_PRIV, "rb") as f:
@@ -179,7 +176,6 @@ class Satellite:
     async def handle_client(self, reader, writer):
         peer = writer.get_extra_info("peername")[0]
         now = time.time()
-        # Check blocked IP
         if peer in self.blocked_ips:
             info = self.blocked_ips[peer]
             if now < info.penalty_until:
@@ -189,32 +185,22 @@ class Satellite:
             else:
                 del self.blocked_ips[peer]
 
-        # Check if node already exists
-        existing_node = None
-        for n in self.nodes.values():
-            if n.writer and n.writer.get_extra_info("peername")[0] == peer:
-                existing_node = n
-                break
-        if existing_node:
-            self.ip_connection_count[peer] = 1  # reset count for active node
-        else:
-            self.ip_connection_count[peer] += 1
-            if self.ip_connection_count[peer] > MAX_PER_IP or len(self.nodes) >= MAX_TOTAL_CONNECTIONS:
-                self.blocked_ips[peer] = SuspiciousIP(ip=peer, last_seen=now, connections=self.ip_connection_count[peer], penalty_until=now + TEMP_BLOCK)
-                writer.close()
-                await writer.wait_closed()
-                return
+        self.ip_connection_count[peer] += 1
+        if self.ip_connection_count[peer] > MAX_PER_IP or len(self.nodes) >= MAX_TOTAL_CONNECTIONS:
+            self.blocked_ips[peer] = SuspiciousIP(ip=peer, last_seen=now, connections=self.ip_connection_count[peer], penalty_until=now + TEMP_BLOCK)
+            writer.close()
+            await writer.wait_closed()
+            return
 
         node = None
         try:
-            while True:
-                try:
-                    line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
-                except asyncio.TimeoutError:
-                    break
+            while not reader.at_eof():
+                line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
                 if not line:
-                    break
+                    await asyncio.sleep(0.1)
+                    continue
                 line = line.decode().strip()
+                now = time.time()
                 self.advisory_ips[peer] = SuspiciousIP(ip=peer, last_seen=now, connections=self.ip_connection_count[peer])
 
                 if line.startswith("IDENT:"):
@@ -231,7 +217,7 @@ class Satellite:
                     _, node_id, region, uptime = line.split(":")
                     if node_id in self.nodes:
                         n = self.nodes[node_id]
-                        n.uptime = int(uptime)
+                        n.uptime = int(uptime.strip())
                         n.last_seen = time.time()
                         n.writer = writer
                         self.ui_dirty.set()
@@ -241,11 +227,14 @@ class Satellite:
                     self.repair_queue.append((fragment, node_id))
                     self.notify(f"Repair requested: {fragment} by {node_id}")
                     asyncio.create_task(self.process_repairs())
+
+        except Exception as e:
+            self.notify(f"Client error: {e}")
         finally:
+            # Do not remove node immediately; cleanup handles timeout
             writer.close()
             await writer.wait_closed()
             self.ip_connection_count[peer] = max(0, self.ip_connection_count[peer]-1)
-            # Do NOT remove node here; cleanup handles actual timeout
 
     async def process_repairs(self):
         while self.repair_queue:
