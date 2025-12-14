@@ -21,7 +21,7 @@ MAX_TOTAL_CONNECTIONS = 100
 MAX_PER_IP = 5
 HANDSHAKE_TIMEOUT = 10  # seconds
 TEMP_BLOCK = 300  # seconds
-
+HEARTBEAT_TIMEOUT = 60  # seconds
 
 @dataclass
 class Node:
@@ -33,14 +33,12 @@ class Node:
     last_seen: float = field(default_factory=time.time)
     writer: asyncio.StreamWriter = None
 
-
 @dataclass
 class SuspiciousIP:
     ip: str
     last_seen: float
     connections: int = 0
     penalty_until: float = 0
-
 
 class Satellite:
     def __init__(self):
@@ -62,7 +60,6 @@ class Satellite:
         self.advisory_ips: dict[str, SuspiciousIP] = {}
 
     # ----------------- KEY HANDLING -----------------
-
     def load_or_create_origin_keys(self):
         if os.path.exists(ORIGIN_PRIV):
             with open(ORIGIN_PRIV, "rb") as f:
@@ -80,7 +77,6 @@ class Satellite:
                         serialization.NoEncryption(),
                     )
                 )
-
         self.origin_pub = self.origin_priv.public_key()
         with open(ORIGIN_PUB, "wb") as f:
             f.write(
@@ -89,7 +85,6 @@ class Satellite:
                     serialization.PublicFormat.Raw,
                 )
             )
-
         raw_pub = self.origin_pub.public_bytes(
             serialization.Encoding.Raw,
             serialization.PublicFormat.Raw,
@@ -97,7 +92,6 @@ class Satellite:
         self.sat_id = hashlib.sha256(raw_pub).hexdigest()[:8]
 
     # ----------------- TLS -----------------
-
     def setup_tls(self):
         if not os.path.exists("cert.pem") or not os.path.exists("key.pem"):
             os.system(
@@ -105,16 +99,13 @@ class Satellite:
                 "-keyout key.pem -out cert.pem -days 365 "
                 "-subj '/CN=LibreMesh Satellite'"
             )
-
         with open("cert.pem", "rb") as f:
             self.tls_fingerprint = hashlib.sha256(f.read()).hexdigest()
-
         ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         ctx.load_cert_chain("cert.pem", "key.pem")
         return ctx
 
     # ----------------- UI -----------------
-
     def notify(self, msg: str):
         ts = time.strftime("%H:%M:%S")
         self.notifications.append(f"[{ts}] {msg}")
@@ -125,10 +116,10 @@ class Satellite:
             await self.ui_dirty.wait()
             self.ui_dirty.clear()
             self.render_ui()
+            await self.cleanup_disconnected_nodes()
 
     def render_ui(self):
         os.system("clear")
-
         # Node table
         print("+-------------------------------------------------------------+")
         print("|                     Satellite Node Status                  |")
@@ -141,7 +132,6 @@ class Satellite:
                 f"{n.uptime:<8} | {','.join(n.fragments):<15} |"
             )
         print("+-------------------------------------------------------------+\n")
-
         # Repair queue
         print("+-------------------------------------------+")
         print("|                Repair Queue               |")
@@ -151,7 +141,6 @@ class Satellite:
         for frag, node_id in self.repair_queue:
             print(f"| {frag:<10} | {node_id:<14} | {self.sat_id:<10} |")
         print("+-------------------------------------------+\n")
-
         # Notifications
         print("+------------------------------------------------+")
         print("|                  Notifications                |")
@@ -159,7 +148,6 @@ class Satellite:
         for n in self.notifications:
             print(f"| {n:<46} |")
         print("+------------------------------------------------+\n")
-
         # Suspicious IPs advisory
         print("+-----------------------------------------------+")
         print("|               Suspicious IPs Advisory        |")
@@ -171,17 +159,26 @@ class Satellite:
             penalty = int(max(0, info.penalty_until - now))
             print(f"| {ip:<10} | {info.connections:<10} | {penalty:<7} | {int(now-info.last_seen):<8} |")
         print("+-----------------------------------------------+\n")
-
         # Footer
         print(f"Satellite ID: {self.sat_id}")
         print(f"TLS Fingerprint: {self.tls_fingerprint}")
 
-    # ----------------- PROTOCOL -----------------
+    async def cleanup_disconnected_nodes(self):
+        now = time.time()
+        to_remove = []
+        for n in self.nodes.values():
+            if n.writer is None and now - n.last_seen > HEARTBEAT_TIMEOUT:
+                to_remove.append(n.node_id)
+        for node_id in to_remove:
+            self.notify(f"Node disconnected: {node_id}")
+            del self.nodes[node_id]
+        if to_remove:
+            self.ui_dirty.set()
 
+    # ----------------- PROTOCOL -----------------
     async def handle_client(self, reader, writer):
         peer = writer.get_extra_info("peername")[0]
         now = time.time()
-
         # Check blocked IP
         if peer in self.blocked_ips:
             info = self.blocked_ips[peer]
@@ -192,7 +189,7 @@ class Satellite:
             else:
                 del self.blocked_ips[peer]
 
-        # Detect if node already registered from this IP
+        # Check if node already exists
         existing_node = None
         for n in self.nodes.values():
             if n.writer and n.writer.get_extra_info("peername")[0] == peer:
@@ -218,8 +215,6 @@ class Satellite:
                 if not line:
                     break
                 line = line.decode().strip()
-
-                # Record in advisory
                 self.advisory_ips[peer] = SuspiciousIP(ip=peer, last_seen=now, connections=self.ip_connection_count[peer])
 
                 if line.startswith("IDENT:"):
@@ -246,14 +241,11 @@ class Satellite:
                     self.repair_queue.append((fragment, node_id))
                     self.notify(f"Repair requested: {fragment} by {node_id}")
                     asyncio.create_task(self.process_repairs())
-
         finally:
-            if node:
-                node.writer = None  # don't remove node entry, keep it for persistent view
-                self.notify(f"Node disconnected: {node.node_id}")
             writer.close()
             await writer.wait_closed()
             self.ip_connection_count[peer] = max(0, self.ip_connection_count[peer]-1)
+            # Do NOT remove node here; cleanup handles actual timeout
 
     async def process_repairs(self):
         while self.repair_queue:
@@ -265,20 +257,14 @@ class Satellite:
             self.ui_dirty.set()
 
     # ----------------- START -----------------
-
     async def start(self):
         self.load_or_create_origin_keys()
         tls = self.setup_tls()
         print(f"Satellite TLS fingerprint: {self.tls_fingerprint}")
-
-        server = await asyncio.start_server(
-            self.handle_client, HOST, PORT, ssl=tls
-        )
-
+        server = await asyncio.start_server(self.handle_client, HOST, PORT, ssl=tls)
         self.ui_dirty.set()
         async with server:
             await asyncio.gather(server.serve_forever(), self.ui_loop())
-
 
 if __name__ == "__main__":
     asyncio.run(Satellite().start())
