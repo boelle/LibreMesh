@@ -4,6 +4,8 @@ from pathlib import Path
 from collections import deque
 import datetime
 import os
+import hashlib
+import psutil  # for CPU load check
 
 # ----------------------------
 # Config
@@ -11,12 +13,9 @@ import os
 SATELLITE_PORT = 4001
 CERT_FILE = "cert.pem"
 KEY_FILE = "key.pem"
-HEARTBEAT_TIMEOUT = 90  # seconds
-MAX_REPAIRS_CONCURRENT = 5
+HEARTBEAT_TIMEOUT = 90
 NOTIFICATION_LIMIT = 10
-
-# Replace with actual trusted origin satellite fingerprint for nodes
-ORIGIN_FINGERPRINT = "REPLACE_WITH_ORIGIN_PUBLIC_KEY_FINGERPRINT"
+MAX_CPU_LOAD = 85  # percent
 
 # ----------------------------
 # Data models
@@ -37,6 +36,7 @@ class RepairJob:
         self.fragment_id = fragment_id
         self.requested_by = requested_by
         self.timestamp = datetime.datetime.utcnow()
+        self.claimed_by = None  # satellite_id that claims job
 
 # ----------------------------
 # Satellite
@@ -44,27 +44,51 @@ class RepairJob:
 class Satellite:
     def __init__(self):
         self.nodes = {}  # node_id -> Node
-        self.repair_queue = deque()
+        self.repair_queue = deque()  # list of RepairJob
         self.notifications = deque(maxlen=NOTIFICATION_LIMIT)
         self.lock = asyncio.Lock()
+        self.satellite_id = None
+        self.key_fingerprint = None
 
     # ------------------------
     # Terminal UI
     # ------------------------
     def render_ui(self):
         os.system("cls" if os.name == "nt" else "clear")
-        print("=== Satellite Node Status ===")
-        print(f"{'Node ID':<12} {'Region':<10} {'Rank':<5} {'Uptime':<10} {'Fragments':<20}")
+
+        # Node Status Table
+        print("+-------------------------------------------------------------+")
+        print("|                     Satellite Node Status                  |")
+        print("+------------+----------+------+----------+-----------------+")
+        print("| Node ID    | Region   | Rank | Uptime   | Fragments       |")
+        print("+------------+----------+------+----------+-----------------+")
         for node in self.nodes.values():
-            status_fragments = ",".join(node.fragments)
-            print(f"{node.node_id:<12} {node.region:<10} {node.rank:<5} {node.uptime:<10} {status_fragments:<20}")
-        print("\n=== Repair Queue ===")
+            frag_list = ",".join(node.fragments)
+            print(f"| {node.node_id:<10} | {node.region:<8} | {node.rank:<4} | {node.uptime:<8} | {frag_list:<15} |")
+        print("+-------------------------------------------------------------+\n")
+
+        # Repair Queue Table
+        print("+-------------------------------------------+")
+        print("|                Repair Queue               |")
+        print("+------------+----------------+------------+")
+        print("| Fragment   | Requested By   | Claimed By |")
+        print("+------------+----------------+------------+")
         for job in self.repair_queue:
-            print(f"{job.fragment_id} (requested by {job.requested_by})")
-        print("\n=== Notifications ===")
+            claim = job.claimed_by or "unclaimed"
+            print(f"| {job.fragment_id:<10} | {job.requested_by:<14} | {claim:<10} |")
+        print("+-------------------------------------------+\n")
+
+        # Notifications Table
+        print("+------------------------------------------------+")
+        print("|                  Notifications                |")
+        print("+------------------------------------------------+")
         for note in self.notifications:
-            print(note)
-        print("\n")
+            print(f"| {note:<46} |")
+        print("+------------------------------------------------+\n")
+
+        # Satellite ID and TLS fingerprint
+        print(f"Satellite ID: {self.satellite_id}")
+        print(f"TLS Fingerprint: {self.key_fingerprint}")
 
     def add_notification(self, message):
         timestamp = datetime.datetime.utcnow().strftime("%H:%M:%S")
@@ -72,7 +96,7 @@ class Satellite:
         self.render_ui()
 
     # ------------------------
-    # Message Processing
+    # Node handling
     # ------------------------
     async def process_line(self, line, writer):
         line = line.strip()
@@ -95,9 +119,6 @@ class Satellite:
             node_id, fragment_id = parts[1], parts[2]
             await self.queue_repair(node_id, fragment_id)
 
-    # ------------------------
-    # Node Handlers
-    # ------------------------
     async def register_node(self, node_id, region, pubkey):
         async with self.lock:
             if node_id in self.nodes:
@@ -118,11 +139,12 @@ class Satellite:
 
     async def queue_repair(self, node_id, fragment_id):
         async with self.lock:
-            self.repair_queue.append(RepairJob(fragment_id, node_id))
+            job = RepairJob(fragment_id, node_id)
+            self.repair_queue.append(job)
             self.add_notification(f"Repair requested: {fragment_id} by {node_id}")
 
     # ------------------------
-    # Node Connection
+    # Node connection
     # ------------------------
     async def handle_connection(self, reader, writer):
         addr = writer.get_extra_info("peername")
@@ -138,27 +160,38 @@ class Satellite:
         finally:
             writer.close()
             await writer.wait_closed()
-            # Mark nodes offline if connection lost (could enhance later)
 
     # ------------------------
-    # Repair Workers
+    # Repair worker
     # ------------------------
     async def repair_worker(self):
         while True:
             async with self.lock:
-                if self.repair_queue:
-                    job = self.repair_queue.popleft()
-                    self.add_notification(f"Processing repair: {job.fragment_id}")
-                    # TODO: assign to repair-capable node or satellite
+                for job in list(self.repair_queue):
+                    if job.claimed_by is None and psutil.cpu_percent() < MAX_CPU_LOAD:
+                        job.claimed_by = self.satellite_id
+                        self.add_notification(f"Satellite claimed job: {job.fragment_id}")
+                        await self.execute_repair(job)
+                        self.repair_queue.remove(job)
             await asyncio.sleep(1)
 
+    async def execute_repair(self, job: RepairJob):
+        self.add_notification(f"Executing repair: {job.fragment_id}")
+        await asyncio.sleep(1)  # simulate repair
+        self.add_notification(f"Repair completed: {job.fragment_id}")
+
     # ------------------------
-    # TLS setup
+    # TLS and fingerprint
     # ------------------------
     def ensure_tls_keys(self):
         if not Path(CERT_FILE).exists() or not Path(KEY_FILE).exists():
             self.add_notification("Generating self-signed TLS keys...")
             self.generate_tls_keys()
+        with open(CERT_FILE, "rb") as f:
+            data = f.read()
+            self.key_fingerprint = hashlib.sha256(data).hexdigest()
+        self.satellite_id = self.key_fingerprint[:8]
+        print(f"Satellite TLS fingerprint: {self.key_fingerprint}")
 
     def generate_tls_keys(self):
         from cryptography import x509
@@ -187,19 +220,14 @@ class Satellite:
             f.write(cert.public_bytes(serialization.Encoding.PEM))
 
     # ------------------------
-    # Start Server
+    # Server start
     # ------------------------
-    async def start(self):
+    async def start_server(self):
         self.ensure_tls_keys()
         ssl_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         ssl_ctx.load_cert_chain(certfile=CERT_FILE, keyfile=KEY_FILE)
         server = await asyncio.start_server(self.handle_connection, "0.0.0.0", SATELLITE_PORT, ssl=ssl_ctx)
         self.add_notification(f"Satellite listening on port {SATELLITE_PORT}")
-
-        # Start repair workers
-        for _ in range(MAX_REPAIRS_CONCURRENT):
-            asyncio.create_task(self.repair_worker())
-
         async with server:
             await server.serve_forever()
 
@@ -208,7 +236,9 @@ class Satellite:
 # ----------------------------
 def main():
     sat = Satellite()
-    asyncio.run(sat.start())
+    loop = asyncio.get_event_loop()
+    loop.create_task(sat.repair_worker())
+    loop.run_until_complete(sat.start_server())
 
 if __name__ == "__main__":
     main()
