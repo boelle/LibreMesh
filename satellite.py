@@ -149,7 +149,7 @@ class Satellite:
         print("+------------+------------+---------+----------+")
         now = time.time()
         for ip, info in self.advisory_ips.items():
-            last_seen_sec = int(now - info.last_seen)  # seconds since last activity
+            last_seen_sec = int(now - info.last_seen)
             penalty = int(max(0, info.penalty_until - now))
             print(f"| {ip:<10} | {info.connections:<10} | {penalty:<7} | {last_seen_sec:<8} |")
         print("+-----------------------------------------------+\n")
@@ -201,6 +201,7 @@ class Satellite:
                     line = line_bytes.decode().strip()
                     now = time.time()
 
+                    # ---------------- Update last_seen on ANY activity ----------------
                     if line.startswith("IDENT:"):
                         _, node_id, region, _pub = line.split(":", 3)
                         if node_id in self.nodes:
@@ -209,6 +210,7 @@ class Satellite:
                         else:
                             node = Node(node_id=node_id, region=region, writer=writer)
                             self.nodes[node_id] = node
+                        node.last_seen = now
                         self.notify(f"Node registered: {node_id}")
 
                     elif line.startswith("HEARTBEAT:"):
@@ -216,22 +218,24 @@ class Satellite:
                         if node_id in self.nodes:
                             n = self.nodes[node_id]
                             n.uptime = int(uptime.strip())
-                            n.last_seen = time.time()  # update only on heartbeat
+                            n.last_seen = now
                             n.writer = writer
                             self.ui_dirty.set()
-
-                            # update advisory_ips based on heartbeat
-                            if peer not in self.advisory_ips:
-                                self.advisory_ips[peer] = SuspiciousIP(ip=peer, last_seen=n.last_seen, connections=1)
-                            else:
-                                self.advisory_ips[peer].last_seen = n.last_seen
-                                self.advisory_ips[peer].connections = self.ip_connection_count[peer]
 
                     elif line.startswith("REPAIR:"):
                         _, node_id, fragment = line.split(":")
                         self.repair_queue.append((fragment, node_id))
+                        if node_id in self.nodes:
+                            self.nodes[node_id].last_seen = now
                         self.notify(f"Repair requested: {fragment} by {node_id}")
                         asyncio.create_task(self.process_repairs())
+
+                    # Update advisory IPs for ANY activity
+                    if peer not in self.advisory_ips:
+                        self.advisory_ips[peer] = SuspiciousIP(ip=peer, last_seen=now, connections=1)
+                    else:
+                        self.advisory_ips[peer].last_seen = now
+                        self.advisory_ips[peer].connections = self.ip_connection_count[peer]
 
                 except Exception:
                     self.notify(f"Client error while reading line:\n{traceback.format_exc()}")
