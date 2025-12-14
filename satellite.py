@@ -45,16 +45,14 @@ class Satellite:
         self.nodes: dict[str, Node] = {}
         self.repair_queue: deque = deque()
         self.notifications: deque = deque(maxlen=MAX_NOTIFICATIONS)
-        self.ui_dirty = asyncio.Event()
+        self.ip_connection_count = defaultdict(int)
+        self.blocked_ips: dict[str, SuspiciousIP] = {}
+        self.advisory_ips: dict[str, SuspiciousIP] = {}
 
         self.origin_priv = None
         self.origin_pub = None
         self.sat_id = None
         self.tls_fingerprint = None
-
-        self.ip_connection_count = defaultdict(int)
-        self.blocked_ips: dict[str, SuspiciousIP] = {}
-        self.advisory_ips: dict[str, SuspiciousIP] = {}
 
     # ----------------- KEYS -----------------
     def load_or_create_origin_keys(self):
@@ -102,17 +100,11 @@ class Satellite:
     def notify(self, msg: str):
         ts = time.strftime("%H:%M:%S")
         self.notifications.append(f"[{ts}] {msg}")
-        self.ui_dirty.set()
-
-    async def ui_loop(self):
-        while True:
-            await self.ui_dirty.wait()
-            self.ui_dirty.clear()
-            self.render_ui()
-            await self.cleanup_disconnected_nodes()
 
     def render_ui(self):
         os.system("clear")
+        now = time.time()
+
         # Node table
         print("+-------------------------------------------------------------+")
         print("|                     Satellite Node Status                  |")
@@ -147,7 +139,6 @@ class Satellite:
         print("+------------+------------+---------+----------+")
         print("| IP         | Connections| Penalty | Last Seen|")
         print("+------------+------------+---------+----------+")
-        now = time.time()
         for ip, info in self.advisory_ips.items():
             last_seen_sec = int(now - info.last_seen)
             penalty = int(max(0, info.penalty_until - now))
@@ -158,22 +149,16 @@ class Satellite:
         print(f"Satellite ID: {self.sat_id}")
         print(f"TLS Fingerprint: {self.tls_fingerprint}")
 
-    async def cleanup_disconnected_nodes(self):
-        now = time.time()
-        to_remove = []
-        for n in self.nodes.values():
-            if n.writer is None and now - n.last_seen > HEARTBEAT_TIMEOUT:
-                to_remove.append(n.node_id)
-        for node_id in to_remove:
-            self.notify(f"Node disconnected: {node_id}")
-            del self.nodes[node_id]
-        if to_remove:
-            self.ui_dirty.set()
+    async def ui_loop(self):
+        while True:
+            self.render_ui()  # Always refresh, counts last_seen
+            await asyncio.sleep(1)
 
     # ----------------- PROTOCOL -----------------
     async def handle_client(self, reader, writer):
         peer = writer.get_extra_info("peername")[0]
         now = time.time()
+
         if peer in self.blocked_ips:
             info = self.blocked_ips[peer]
             if now < info.penalty_until:
@@ -220,7 +205,6 @@ class Satellite:
                             n.uptime = int(uptime.strip())
                             n.last_seen = now
                             n.writer = writer
-                            self.ui_dirty.set()
 
                     elif line.startswith("REPAIR:"):
                         _, node_id, fragment = line.split(":")
@@ -253,7 +237,6 @@ class Satellite:
             await asyncio.sleep(REPAIR_DELAY)
             self.notify(f"Repair completed: {frag}")
             self.repair_queue.popleft()
-            self.ui_dirty.set()
 
     # ----------------- START -----------------
     async def start(self):
@@ -261,7 +244,6 @@ class Satellite:
         tls = self.setup_tls()
         print(f"Satellite TLS fingerprint: {self.tls_fingerprint}")
         server = await asyncio.start_server(self.handle_client, HOST, PORT, ssl=tls)
-        self.ui_dirty.set()
         async with server:
             await asyncio.gather(server.serve_forever(), self.ui_loop())
 
