@@ -213,17 +213,17 @@ def generate_keys_and_certs():
         cert_data = f.read()
     cert = x509.load_pem_x509_certificate(cert_data, default_backend())
     # FIX: Access the first element of the list returned by get_attributes_for_oid()
-    SATELLITE_ID = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value # Corrected syntax
+    SATELLITE_ID = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME).value
     TLS_FINGERPRINT = cert.fingerprint(hashes.SHA1()).hex(':')
     ADVERTISED_IP = get_local_ip()
     print(f"Satellite ID: {SATELLITE_ID}")
     print(f"TLS Fingerprint: {TLS_FINGERPRINT}")
-    print(f"Advertising IP: {ADVERTIED_IP}")
+    # FIX: Corrected variable name from ADVERTIED_IP to ADVERTISED_IP
+    print(f"Advertising IP: {ADVERTISED_IP}")
 
 
 # --- Networking/Protocol Classes ---
 class SatelliteProtocol(asyncio.Protocol):
-    # ... (rest of code omitted for brevity) ...
     def __init__(self):
         self.node_id = None
         self.last_seen = time.time()
@@ -272,7 +272,6 @@ class SatelliteProtocol(asyncio.Protocol):
 
 # --- Background Tasks ---
 async def audit_and_queue_repairs():
-    # ... (rest of code omitted for brevity) ...
     while True:
         await asyncio.sleep(45)
         if random.random() > 0.8 and REPAIR_QUEUE.empty():
@@ -287,7 +286,6 @@ async def audit_and_queue_repairs():
             await REPAIR_QUEUE.put(job)
 
 async def repair_worker():
-    # ... (rest of code omitted for brevity) ...
     while True:
         job = await REPAIR_QUEUE.get()
         try:
@@ -301,7 +299,6 @@ async def repair_worker():
             REPAIR_QUEUE.task_done()
 
 async def watchdog_task():
-    # ... (rest of code omitted for brevity) ...
     while True:
         await asyncio.sleep(1)
         current_time = time.time()
@@ -311,7 +308,6 @@ async def watchdog_task():
 
 
 async def display_ui():
-    # ... (rest of code omitted for brevity) ...
     HEADER_WIDTH = 54
     while True:
         sys.stdout.write('\033[H') 
