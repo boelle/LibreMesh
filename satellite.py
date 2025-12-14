@@ -4,7 +4,7 @@ import ssl
 import os
 import time
 import hashlib
-from collections import deque
+from collections import deque, defaultdict
 from dataclasses import dataclass, field
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
@@ -17,6 +17,10 @@ ORIGIN_PUB = "origin_pubkey.bin"
 
 MAX_NOTIFICATIONS = 10
 REPAIR_DELAY = 1.0
+MAX_TOTAL_CONNECTIONS = 100
+MAX_PER_IP = 5
+HANDSHAKE_TIMEOUT = 10  # seconds
+TEMP_BLOCK = 300  # seconds
 
 
 @dataclass
@@ -30,6 +34,14 @@ class Node:
     writer: asyncio.StreamWriter = None
 
 
+@dataclass
+class SuspiciousIP:
+    ip: str
+    last_seen: float
+    connections: int = 0
+    penalty_until: float = 0
+
+
 class Satellite:
     def __init__(self):
         self.nodes: dict[str, Node] = {}
@@ -41,6 +53,13 @@ class Satellite:
         self.origin_pub = None
         self.sat_id = None
         self.tls_fingerprint = None
+
+        # DoS mitigation
+        self.ip_connection_count = defaultdict(int)
+        self.blocked_ips: dict[str, SuspiciousIP] = {}
+
+        # Advisory table
+        self.advisory_ips: dict[str, SuspiciousIP] = {}
 
     # ----------------- KEY HANDLING -----------------
 
@@ -110,6 +129,7 @@ class Satellite:
     def render_ui(self):
         os.system("clear")
 
+        # Node table
         print("+-------------------------------------------------------------+")
         print("|                     Satellite Node Status                  |")
         print("+------------+----------+------+----------+-----------------+")
@@ -122,6 +142,7 @@ class Satellite:
             )
         print("+-------------------------------------------------------------+\n")
 
+        # Repair queue
         print("+-------------------------------------------+")
         print("|                Repair Queue               |")
         print("+------------+----------------+------------+")
@@ -131,6 +152,7 @@ class Satellite:
             print(f"| {frag:<10} | {node_id:<14} | {self.sat_id:<10} |")
         print("+-------------------------------------------+\n")
 
+        # Notifications
         print("+------------------------------------------------+")
         print("|                  Notifications                |")
         print("+------------------------------------------------+")
@@ -138,24 +160,76 @@ class Satellite:
             print(f"| {n:<46} |")
         print("+------------------------------------------------+\n")
 
+        # Suspicious IPs advisory
+        print("+-----------------------------------------------+")
+        print("|               Suspicious IPs Advisory        |")
+        print("+------------+------------+---------+----------+")
+        print("| IP         | Connections| Penalty | Last Seen|")
+        print("+------------+------------+---------+----------+")
+        now = time.time()
+        for ip, info in self.advisory_ips.items():
+            penalty = int(max(0, info.penalty_until - now))
+            print(f"| {ip:<10} | {info.connections:<10} | {penalty:<7} | {int(now-info.last_seen):<8} |")
+        print("+-----------------------------------------------+\n")
+
+        # Footer
         print(f"Satellite ID: {self.sat_id}")
         print(f"TLS Fingerprint: {self.tls_fingerprint}")
 
     # ----------------- PROTOCOL -----------------
 
     async def handle_client(self, reader, writer):
+        peer = writer.get_extra_info("peername")[0]
+        now = time.time()
+
+        # Check blocked IP
+        if peer in self.blocked_ips:
+            info = self.blocked_ips[peer]
+            if now < info.penalty_until:
+                writer.close()
+                await writer.wait_closed()
+                return
+            else:
+                del self.blocked_ips[peer]
+
+        # Detect if node already registered from this IP
+        existing_node = None
+        for n in self.nodes.values():
+            if n.writer and n.writer.get_extra_info("peername")[0] == peer:
+                existing_node = n
+                break
+        if existing_node:
+            self.ip_connection_count[peer] = 1  # reset count for active node
+        else:
+            self.ip_connection_count[peer] += 1
+            if self.ip_connection_count[peer] > MAX_PER_IP or len(self.nodes) >= MAX_TOTAL_CONNECTIONS:
+                self.blocked_ips[peer] = SuspiciousIP(ip=peer, last_seen=now, connections=self.ip_connection_count[peer], penalty_until=now + TEMP_BLOCK)
+                writer.close()
+                await writer.wait_closed()
+                return
+
         node = None
         try:
             while True:
-                line = await reader.readline()
+                try:
+                    line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
+                except asyncio.TimeoutError:
+                    break
                 if not line:
                     break
                 line = line.decode().strip()
 
+                # Record in advisory
+                self.advisory_ips[peer] = SuspiciousIP(ip=peer, last_seen=now, connections=self.ip_connection_count[peer])
+
                 if line.startswith("IDENT:"):
                     _, node_id, region, _pub = line.split(":", 3)
-                    node = Node(node_id=node_id, region=region, writer=writer)
-                    self.nodes[node_id] = node
+                    if node_id in self.nodes:
+                        node = self.nodes[node_id]
+                        node.writer = writer
+                    else:
+                        node = Node(node_id=node_id, region=region, writer=writer)
+                        self.nodes[node_id] = node
                     self.notify(f"Node registered: {node_id}")
 
                 elif line.startswith("HEARTBEAT:"):
@@ -164,6 +238,7 @@ class Satellite:
                         n = self.nodes[node_id]
                         n.uptime = int(uptime)
                         n.last_seen = time.time()
+                        n.writer = writer
                         self.ui_dirty.set()
 
                 elif line.startswith("REPAIR:"):
@@ -174,10 +249,11 @@ class Satellite:
 
         finally:
             if node:
-                self.nodes.pop(node.node_id, None)
+                node.writer = None  # don't remove node entry, keep it for persistent view
                 self.notify(f"Node disconnected: {node.node_id}")
             writer.close()
             await writer.wait_closed()
+            self.ip_connection_count[peer] = max(0, self.ip_connection_count[peer]-1)
 
     async def process_repairs(self):
         while self.repair_queue:
@@ -193,7 +269,6 @@ class Satellite:
     async def start(self):
         self.load_or_create_origin_keys()
         tls = self.setup_tls()
-
         print(f"Satellite TLS fingerprint: {self.tls_fingerprint}")
 
         server = await asyncio.start_server(
