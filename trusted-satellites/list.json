@@ -1,11 +1,13 @@
 {
-  "version": 1,
-  "satellites": [
-    {
-      "ip": "192.168.0.163",
-      "port": 4001,
-      "fingerprint": "12cdbc6dc3183d8ed5f580f39e337d0653bdfca31046a75a7383a332714af04e"
-    }
-  ],
-  "signature": "evNBD0/rdgnw7sPDgGaTHfZFfl7Cr/DyQrpBLQjfCbESNa3XfxRmX/Y5PgiWd8qDwZ4FvIJWEUiOMJwq0/toAA=="
+    "data": {
+        "satellites": [
+            {
+                "id": "localhost",
+                "fingerprint": "c1:6d:00:40:d8:f8:e2:22:b5:a6:69:c5:ef:10:f7:9e:d0:67:fa:40",
+                "hostname": "0.0.0.0",
+                "port": 8888
+            }
+        ]
+    },
+    "signature": "M0qqWU/J/GH+NYvk+PmQD3Vszrwyas5P/+tPHb/amps9a9e4XwywaAndYiSehzboSQekPj4OfGH3dxUz7HhReuc0l1+Cs8KA7/>
 }
