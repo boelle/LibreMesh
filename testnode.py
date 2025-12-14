@@ -15,6 +15,7 @@ async def main():
     context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
+    uptime = 0  # persisted across reconnects
 
     while True:
         try:
@@ -26,7 +27,7 @@ async def main():
             await writer.drain()
 
             async def heartbeat_loop():
-                uptime = 0
+                nonlocal uptime
                 while True:
                     writer.write(f"HEARTBEAT:{NODE_ID}:{REGION}:{uptime}\n".encode())
                     await writer.drain()
@@ -42,6 +43,7 @@ async def main():
                     await asyncio.sleep(0.5)
 
             await asyncio.gather(heartbeat_loop(), repair_loop())
+
         except Exception as e:
             print(f"Connection lost, retry later ({e})")
             await asyncio.sleep(5)
