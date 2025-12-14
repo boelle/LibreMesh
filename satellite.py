@@ -1,121 +1,142 @@
 import asyncio
 import ssl
 import os
-import datetime
+import time
+import socket
+from collections import deque
 
 PORT = 4001
-CERT_FILE = "cert.pem"
-KEY_FILE = "key.pem"
-
-connected_nodes = {}
-repair_queue = []
-notifications = []
-
+REPAIR_DELAY = 10  # seconds
 MAX_NOTIFICATIONS = 10
 
-# Ensure TLS certificate exists
-if not os.path.exists(CERT_FILE) or not os.path.exists(KEY_FILE):
-    print("TLS cert/key not found, generating self-signed certificate...")
-    os.system(f"openssl req -x509 -newkey rsa:2048 -nodes -keyout {KEY_FILE} -out {CERT_FILE} -days 365 -subj '/CN=localhost'")
+nodes = {}  # node_id -> dict
+connections = {}  # writer -> node_id
+repair_queue = asyncio.Queue()
+notifications = deque(maxlen=MAX_NOTIFICATIONS)
 
-ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-ssl_context.load_cert_chain(certfile=CERT_FILE, keyfile=KEY_FILE)
+# --------------------------------------------------
+def notify(msg):
+    ts = time.strftime("%H:%M:%S")
+    notifications.append(f"{ts} - {msg}")
 
-def add_notification(message):
-    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-    notifications.append(f"{timestamp} - {message}")
-    if len(notifications) > MAX_NOTIFICATIONS:
-        notifications.pop(0)
+# --------------------------------------------------
+def clear_screen():
+    os.system("clear")
 
-def print_table():
-    os.system('clear')
+def render_table():
+    clear_screen()
+
     print("=== Satellite Node Status ===")
-    print("Node ID         Region     Rank  Uptime     Fragments")
-    print("----------------------------------------------------------------------")
-    for node_id, node_info in connected_nodes.items():
-        fragments_str = ",".join(node_info["fragments"])
-        print(f"{node_id:<15}{node_info['region']:<10}{node_info['rank']:<6}{node_info['uptime']:<10}{fragments_str}")
-    print("\n=== Repair Queue ===")
-    if repair_queue:
-        for idx, frag in enumerate(repair_queue, 1):
-            print(f"{idx}. {frag}")
-    else:
-        print("No repair jobs queued.")
-    print("======================================================================")
-    print("\n=== Notifications (last 10) ===")
-    for note in notifications:
-        print(note)
-    print("======================================================================")
+    print(f"{'Node ID':15} {'Region':10} {'Rank':5} {'Uptime':10} Fragments")
+    print("-" * 70)
 
-async def handle_node(reader, writer):
-    addr = writer.get_extra_info('peername')
-    add_notification(f"Node connected: {addr}")
-    node_id = f"node{addr[1]}"
-    connected_nodes[node_id] = {
-        "region": "EU",
-        "rank": 85,
-        "uptime": 0,
-        "fragments": [f"frag{i}" for i in range(1, 6)]
-    }
-    print_table()
+    for node_id, n in nodes.items():
+        frags = ",".join(sorted(n["fragments"]))
+        print(f"{node_id:15} {n['region']:10} {n['rank']:5} {n['uptime']:10} {frags}")
+
+    print("\n=== Repair Queue ===")
+    if repair_queue.empty():
+        print("No repair jobs queued.")
+    else:
+        for i, item in enumerate(list(repair_queue._queue), 1):
+            print(f"{i}. {item}")
+
+    print("=" * 70)
+    print("\n=== Notifications (last 10) ===")
+    for n in notifications:
+        print(n)
+    print("=" * 70)
+
+# --------------------------------------------------
+async def repair_worker():
+    while True:
+        fragment = await repair_queue.get()
+        notify(f"Processing repair for fragment {fragment}")
+        await asyncio.sleep(REPAIR_DELAY)
+        repair_queue.task_done()
+
+# --------------------------------------------------
+async def handle_client(reader, writer):
+    peer = writer.get_extra_info("peername")
+
     try:
         while True:
             data = await reader.readline()
             if not data:
                 break
-            message = data.decode().strip()
-            if message.startswith("HEARTBEAT"):
-                parts = message.split(":")
-                node_id = parts[1]
-                region = parts[2]
-                uptime = int(parts[3])
-                if node_id not in connected_nodes:
-                    connected_nodes[node_id] = {
+
+            msg = data.decode().strip()
+
+            if msg.startswith("IDENT:"):
+                _, node_id, region, pubkey = msg.split(":", 3)
+
+                if node_id not in nodes:
+                    nodes[node_id] = {
                         "region": region,
                         "rank": 85,
-                        "uptime": uptime,
-                        "fragments": [f"frag{i}" for i in range(1,6)]
+                        "uptime": 0,
+                        "last_hb": time.time(),
+                        "fragments": set(),
                     }
-                else:
-                    connected_nodes[node_id]["uptime"] = uptime
-                    connected_nodes[node_id]["region"] = region
-                print_table()
-            elif message.startswith("REPAIR_REQUEST"):
-                frag = message.split(":")[1]
-                repair_queue.append(frag)
-                add_notification(f"Repair job queued for fragment {frag}")
-                print_table()
+                    notify(f"Node registered: {node_id}")
+
+                connections[writer] = node_id
+
+            elif msg.startswith("HEARTBEAT:"):
+                _, node_id, region, uptime = msg.split(":")
+
+                if node_id in nodes:
+                    nodes[node_id]["uptime"] = int(uptime)
+                    nodes[node_id]["last_hb"] = time.time()
+
+            elif msg.startswith("REPAIR:"):
+                _, node_id, fragment = msg.split(":", 2)
+
+                if node_id in nodes:
+                    if fragment not in nodes[node_id]["fragments"]:
+                        nodes[node_id]["fragments"].add(fragment)
+                        await repair_queue.put(fragment)
+                        notify(f"Repair job queued for fragment {fragment}")
+
     except Exception as e:
-        add_notification(f"Error with node {addr}: {e}")
+        notify(f"Connection error: {e}")
+
     finally:
-        add_notification(f"Node disconnected: {addr}")
-        connected_nodes.pop(node_id, None)
-        print_table()
+        node_id = connections.pop(writer, None)
+        if node_id:
+            notify(f"Node disconnected: {node_id}")
         writer.close()
         await writer.wait_closed()
 
-async def repair_worker():
+# --------------------------------------------------
+async def ui_loop():
     while True:
-        if repair_queue:
-            frag = repair_queue.pop(0)
-            add_notification(f"Processing repair for fragment {frag}")
-            print_table()
-            await asyncio.sleep(10)  # slow repair so you can see it
-        else:
-            await asyncio.sleep(1)
+        render_table()
+        await asyncio.sleep(1)
 
-async def start_server():
-    server = await asyncio.start_server(handle_node, '0.0.0.0', PORT, ssl=ssl_context)
-    add_notification(f"Satellite listening on port {PORT}")
-    print_table()
-    async with server:
-        await asyncio.gather(server.serve_forever(), repair_worker())
-
+# --------------------------------------------------
 async def main():
-    await start_server()
+    hostname = socket.gethostname()
+    notify(f"Satellite listening on port {PORT}")
+    notify(f"Hostname: {hostname}")
 
+    ssl_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    if not os.path.exists("cert.pem") or not os.path.exists("key.pem"):
+        notify("TLS cert/key missing")
+        raise RuntimeError("cert.pem/key.pem required")
+
+    ssl_ctx.load_cert_chain("cert.pem", "key.pem")
+
+    server = await asyncio.start_server(
+        handle_client, "0.0.0.0", PORT, ssl=ssl_ctx
+    )
+
+    asyncio.create_task(repair_worker())
+    asyncio.create_task(ui_loop())
+
+    async with server:
+        await server.serve_forever()
+
+# --------------------------------------------------
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\nSatellite shutting down.")
+    asyncio.run(main())
