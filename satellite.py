@@ -21,7 +21,7 @@ REPAIR_DELAY = 1.0
 MAX_TOTAL_CONNECTIONS = 100
 MAX_PER_IP = 5
 TEMP_BLOCK = 300
-HEARTBEAT_TIMEOUT = 90  # now longer than node heartbeat
+HEARTBEAT_TIMEOUT = 90  # longer than node heartbeat
 
 @dataclass
 class Node:
@@ -141,7 +141,7 @@ class Satellite:
             print(f"| {n:<46} |")
         print("+------------------------------------------------+\n")
 
-        # Suspicious IPs advisory
+        # Suspicious IPs advisory — FIXED LAST SEEN
         print("+-----------------------------------------------+")
         print("|               Suspicious IPs Advisory        |")
         print("+------------+------------+---------+----------+")
@@ -149,8 +149,9 @@ class Satellite:
         print("+------------+------------+---------+----------+")
         now = time.time()
         for ip, info in self.advisory_ips.items():
+            last_seen_sec = int(now - info.last_seen)  # fixed
             penalty = int(max(0, info.penalty_until - now))
-            print(f"| {ip:<10} | {info.connections:<10} | {penalty:<7} | {int(now-info.last_seen):<8} |")
+            print(f"| {ip:<10} | {info.connections:<10} | {penalty:<7} | {last_seen_sec:<8} |")
         print("+-----------------------------------------------+\n")
 
         # Footer
@@ -199,7 +200,13 @@ class Satellite:
                         continue
                     line = line_bytes.decode().strip()
                     now = time.time()
-                    self.advisory_ips[peer] = SuspiciousIP(ip=peer, last_seen=now, connections=self.ip_connection_count[peer])
+
+                    # Update advisory_ips without overwriting
+                    if peer not in self.advisory_ips:
+                        self.advisory_ips[peer] = SuspiciousIP(ip=peer, last_seen=now, connections=1)
+                    else:
+                        self.advisory_ips[peer].last_seen = now
+                        self.advisory_ips[peer].connections = self.ip_connection_count[peer]
 
                     if line.startswith("IDENT:"):
                         _, node_id, region, _pub = line.split(":", 3)
@@ -234,7 +241,6 @@ class Satellite:
                     await asyncio.sleep(0.1)
 
         finally:
-            # Do not remove node immediately; cleanup handles timeout
             writer.close()
             await writer.wait_closed()
             self.ip_connection_count[peer] = max(0, self.ip_connection_count[peer]-1)
