@@ -6,6 +6,7 @@ import time
 import os
 import textwrap
 import base64
+import sys
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -32,8 +33,7 @@ ORIGIN_PRIVKEY_PATH = 'origin_privkey.pem'
 CERT_PATH = 'cert.pem'
 KEY_PATH = 'key.pem'
 UI_NOTIFICATIONS = asyncio.Queue(maxsize=10)
-# New state management for the list of trusted satellites
-TRUSTED_SATELLITES = {} # {satellite_id: {fingerprint, hostname, port}}
+TRUSTED_SATELLITES = {}
 
 
 # --- Helper Functions ---
@@ -61,9 +61,9 @@ def load_trusted_satellites():
             
             data = signed_data['data']
             signature = base64.b64decode(signed_data['signature'])
+            # Ensure sorting keys consistently for verification
             json_data_bytes = json.dumps(data, indent=4, sort_keys=True).encode('utf-8')
 
-            # Verify the signature using the origin public key
             public_key = serialization.load_pem_public_key(ORIGIN_PUBKEY_PEM, backend=default_backend())
             public_key.verify(
                 signature,
@@ -76,13 +76,11 @@ def load_trusted_satellites():
             )
             print(f"Verified signature of existing {LIST_JSON_PATH}.")
             
-            # Load verified data into memory
             for sat in data['satellites']:
                 TRUSTED_SATELLITES[sat['id']] = sat
         
         except Exception as e:
             print(f"ERROR: Failed to load or verify {LIST_JSON_PATH}: {e}")
-            # Exit or halt if the trusted list cannot be verified as authentic
             exit(1)
 
 
@@ -101,13 +99,13 @@ def sign_and_save_satellite_list():
         backend=default_backend()
     )
 
-    # Convert in-memory dictionary back into list format for JSON storage
     satellites_list_formatted = list(TRUSTED_SATELLITES.values())
     
     satellites_list_data = {
         "satellites": satellites_list_formatted
     }
     
+    # Ensure consistent sorting for signing and verification
     json_data_bytes = json.dumps(satellites_list_data, indent=4, sort_keys=True).encode('utf-8')
 
     signature = private_key.sign(
@@ -125,7 +123,8 @@ def sign_and_save_satellite_list():
     }
 
     with open(LIST_JSON_PATH, 'w') as f:
-        json.dump(final_list_structure, f, indent=4)
+        # Use separators parameter to prevent extra whitespace for compact signature line
+        json.dump(final_list_structure, f, indent=4, separators=(',', ': '))
     
     print(f"Generated and signed {LIST_JSON_PATH} with {len(TRUSTED_SATELLITES)} entries.")
 
@@ -177,7 +176,7 @@ def generate_keys_and_certs():
     with open(CERT_PATH, 'rb') as f:
         cert_data = f.read()
     cert = x509.load_pem_x509_certificate(cert_data, default_backend())
-    SATELLITE_ID = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value # Fixed index access
+    SATELLITE_ID = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME).value
     TLS_FINGERPRINT = cert.fingerprint(hashes.SHA1()).hex(':')
     print(f"Satellite ID: {SATELLITE_ID}")
     print(f"TLS Fingerprint: {TLS_FINGERPRINT}")
@@ -271,7 +270,9 @@ async def watchdog_task():
 async def display_ui():
     HEADER_WIDTH = 54
     while True:
-        os.system('clear' if os.name == 'posix' else 'cls')
+        # Move cursor to top-left home position instead of clearing screen
+        sys.stdout.write('\033[H') 
+        sys.stdout.flush()
 
         # 1. Satellite Node Status
         print("=" * HEADER_WIDTH)
@@ -326,6 +327,8 @@ async def display_ui():
         print(f"Trusted Satellites:    {len(TRUSTED_SATELLITES)} in list.json")
         print("=" * HEADER_WIDTH)
 
+        await asyncio.sleep(1)
+
 
 async def main():
     generate_keys_and_certs() # Setup keys/certs on startup
@@ -356,6 +359,8 @@ async def main():
 if __name__ == '__main__':
     import random
     try:
+        # Clear screen once at very start for clean initial output
+        os.system('clear' if os.name == 'posix' else 'cls') 
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Satellite shutting down.")
