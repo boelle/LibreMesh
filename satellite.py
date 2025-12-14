@@ -8,12 +8,13 @@ from collections import deque, defaultdict
 from dataclasses import dataclass, field
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
+import traceback
 
 HOST = "0.0.0.0"
 PORT = 4001
 
 ORIGIN_PRIV = "origin_privkey.bin"
-ORIGIN_PUB = "origin_pubkey.bin"
+ORIGIN_PUB = "origin_pubkey.pem"
 
 MAX_NOTIFICATIONS = 10
 REPAIR_DELAY = 1.0
@@ -62,31 +63,27 @@ class Satellite:
             with open(ORIGIN_PRIV, "rb") as f:
                 data = f.read()
                 if len(data) != 32:
-                    raise RuntimeError("origin_privkey.bin must be exactly 32 bytes")
+                    raise RuntimeError("origin_privkey.bin must be 32 bytes")
                 self.origin_priv = ed25519.Ed25519PrivateKey.from_private_bytes(data)
         else:
             self.origin_priv = ed25519.Ed25519PrivateKey.generate()
             with open(ORIGIN_PRIV, "wb") as f:
-                f.write(
-                    self.origin_priv.private_bytes(
-                        serialization.Encoding.Raw,
-                        serialization.PrivateFormat.Raw,
-                        serialization.NoEncryption(),
-                    )
-                )
+                f.write(self.origin_priv.private_bytes(
+                    serialization.Encoding.Raw,
+                    serialization.PrivateFormat.Raw,
+                    serialization.NoEncryption()
+                ))
+
         self.origin_pub = self.origin_priv.public_key()
         with open(ORIGIN_PUB, "wb") as f:
-            f.write(
-                self.origin_pub.public_bytes(
-                    serialization.Encoding.Raw,
-                    serialization.PublicFormat.Raw,
-                )
-            )
-        raw_pub = self.origin_pub.public_bytes(
-            serialization.Encoding.Raw,
-            serialization.PublicFormat.Raw,
-        )
-        self.sat_id = hashlib.sha256(raw_pub).hexdigest()[:8]
+            f.write(self.origin_pub.public_bytes(
+                serialization.Encoding.Raw,
+                serialization.PublicFormat.Raw
+            ))
+
+        self.sat_id = hashlib.sha256(self.origin_pub.public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )).hexdigest()[:8]
 
     # ----------------- TLS -----------------
     def setup_tls(self):
@@ -124,11 +121,9 @@ class Satellite:
         print("| Node ID    | Region   | Rank | Uptime   | Fragments       |")
         print("+------------+----------+------+----------+-----------------+")
         for n in self.nodes.values():
-            print(
-                f"| {n.node_id:<10} | {n.region:<8} | {n.rank:<4} | "
-                f"{n.uptime:<8} | {','.join(n.fragments):<15} |"
-            )
+            print(f"| {n.node_id:<10} | {n.region:<8} | {n.rank:<4} | {n.uptime:<8} | {','.join(n.fragments):<15} |")
         print("+-------------------------------------------------------------+\n")
+
         # Repair queue
         print("+-------------------------------------------+")
         print("|                Repair Queue               |")
@@ -138,6 +133,7 @@ class Satellite:
         for frag, node_id in self.repair_queue:
             print(f"| {frag:<10} | {node_id:<14} | {self.sat_id:<10} |")
         print("+-------------------------------------------+\n")
+
         # Notifications
         print("+------------------------------------------------+")
         print("|                  Notifications                |")
@@ -145,6 +141,7 @@ class Satellite:
         for n in self.notifications:
             print(f"| {n:<46} |")
         print("+------------------------------------------------+\n")
+
         # Suspicious IPs advisory
         print("+-----------------------------------------------+")
         print("|               Suspicious IPs Advisory        |")
@@ -156,6 +153,7 @@ class Satellite:
             penalty = int(max(0, info.penalty_until - now))
             print(f"| {ip:<10} | {info.connections:<10} | {penalty:<7} | {int(now-info.last_seen):<8} |")
         print("+-----------------------------------------------+\n")
+
         # Footer
         print(f"Satellite ID: {self.sat_id}")
         print(f"TLS Fingerprint: {self.tls_fingerprint}")
@@ -195,41 +193,47 @@ class Satellite:
         node = None
         try:
             while not reader.at_eof():
-                line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
-                if not line:
+                try:
+                    line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
+                    if not line:
+                        await asyncio.sleep(0.1)
+                        continue
+                    line = line.decode().strip()
+                    now = time.time()
+                    self.advisory_ips[peer] = SuspiciousIP(ip=peer, last_seen=now, connections=self.ip_connection_count[peer])
+
+                    if line.startswith("IDENT:"):
+                        _, node_id, region, _pub = line.split(":", 3)
+                        if node_id in self.nodes:
+                            node = self.nodes[node_id]
+                            node.writer = writer
+                        else:
+                            node = Node(node_id=node_id, region=region, writer=writer)
+                            self.nodes[node_id] = node
+                        self.notify(f"Node registered: {node_id}")
+
+                    elif line.startswith("HEARTBEAT:"):
+                        _, node_id, region, uptime = line.split(":")
+                        if node_id in self.nodes:
+                            n = self.nodes[node_id]
+                            try:
+                                n.uptime = int(uptime.strip())
+                            except Exception as e:
+                                self.notify(f"Failed to parse uptime from {line}:\n{traceback.format_exc()}")
+                            n.last_seen = time.time()
+                            n.writer = writer
+                            self.ui_dirty.set()
+
+                    elif line.startswith("REPAIR:"):
+                        _, node_id, fragment = line.split(":")
+                        self.repair_queue.append((fragment, node_id))
+                        self.notify(f"Repair requested: {fragment} by {node_id}")
+                        asyncio.create_task(self.process_repairs())
+
+                except Exception as e:
+                    self.notify(f"Client error while reading line:\n{traceback.format_exc()}")
                     await asyncio.sleep(0.1)
-                    continue
-                line = line.decode().strip()
-                now = time.time()
-                self.advisory_ips[peer] = SuspiciousIP(ip=peer, last_seen=now, connections=self.ip_connection_count[peer])
 
-                if line.startswith("IDENT:"):
-                    _, node_id, region, _pub = line.split(":", 3)
-                    if node_id in self.nodes:
-                        node = self.nodes[node_id]
-                        node.writer = writer
-                    else:
-                        node = Node(node_id=node_id, region=region, writer=writer)
-                        self.nodes[node_id] = node
-                    self.notify(f"Node registered: {node_id}")
-
-                elif line.startswith("HEARTBEAT:"):
-                    _, node_id, region, uptime = line.split(":")
-                    if node_id in self.nodes:
-                        n = self.nodes[node_id]
-                        n.uptime = int(uptime.strip())
-                        n.last_seen = time.time()
-                        n.writer = writer
-                        self.ui_dirty.set()
-
-                elif line.startswith("REPAIR:"):
-                    _, node_id, fragment = line.split(":")
-                    self.repair_queue.append((fragment, node_id))
-                    self.notify(f"Repair requested: {fragment} by {node_id}")
-                    asyncio.create_task(self.process_repairs())
-
-        except Exception as e:
-            self.notify(f"Client error: {e}")
         finally:
             # Do not remove node immediately; cleanup handles timeout
             writer.close()
