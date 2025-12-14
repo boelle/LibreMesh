@@ -20,6 +20,12 @@ from datetime import datetime, timedelta
 LISTEN_HOST = '0.0.0.0'
 LISTEN_PORT = 8888
 NODE_TIMEOUT = 60 # seconds
+# --- NEW CONFIGURATION VARIABLE ---
+# Uncomment the line below and set your static public/external IP when needed.
+# If left commented, the script will automatically detect the local IP.
+# ADVERTISED_IP_CONFIG = 'your.external.ip.address' 
+ADVERTISED_IP_CONFIG = None 
+
 
 NODES = {}
 REPAIR_QUEUE = asyncio.Queue()
@@ -34,9 +40,30 @@ CERT_PATH = 'cert.pem'
 KEY_PATH = 'key.pem'
 UI_NOTIFICATIONS = asyncio.Queue(maxsize=10)
 TRUSTED_SATELLITES = {}
+ADVERTISED_IP = None 
 
 
 # --- Helper Functions ---
+def get_local_ip():
+    """
+    Attempts to determine the non-loopback local IP address.
+    """
+    if ADVERTISED_IP_CONFIG:
+        return ADVERTISED_IP_CONFIG # Use the manually configured IP if provided
+
+    s = None
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip_address, port = s.getsockname()
+        s.close()
+        return ip_address
+    except socket.error:
+        if s:
+            s.close()
+        return socket.gethostbyname(socket.gethostname())
+
+
 def add_or_update_satellite(sat_id, fingerprint, hostname, port):
     """Adds a new satellite to the in-memory list and re-signs/saves the file."""
     if sat_id not in TRUSTED_SATELLITES:
@@ -61,7 +88,6 @@ def load_trusted_satellites():
             
             data = signed_data['data']
             signature = base64.b64decode(signed_data['signature'])
-            # Ensure sorting keys consistently for verification
             json_data_bytes = json.dumps(data, indent=4, sort_keys=True).encode('utf-8')
 
             public_key = serialization.load_pem_public_key(ORIGIN_PUBKEY_PEM, backend=default_backend())
@@ -105,7 +131,6 @@ def sign_and_save_satellite_list():
         "satellites": satellites_list_formatted
     }
     
-    # Ensure consistent sorting for signing and verification
     json_data_bytes = json.dumps(satellites_list_data, indent=4, sort_keys=True).encode('utf-8')
 
     signature = private_key.sign(
@@ -123,7 +148,6 @@ def sign_and_save_satellite_list():
     }
 
     with open(LIST_JSON_PATH, 'w') as f:
-        # Use separators parameter to prevent extra whitespace for compact signature line
         json.dump(final_list_structure, f, indent=4, separators=(',', ': '))
     
     print(f"Generated and signed {LIST_JSON_PATH} with {len(TRUSTED_SATELLITES)} entries.")
@@ -172,14 +196,16 @@ def generate_keys_and_certs():
         print("Reusing existing master origin keys.")
     
     # 3. Derive Satellite ID and Fingerprint (must be stable)
-    global SATELLITE_ID, TLS_FINGERPRINT
+    global SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP
     with open(CERT_PATH, 'rb') as f:
         cert_data = f.read()
     cert = x509.load_pem_x509_certificate(cert_data, default_backend())
     SATELLITE_ID = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME).value
     TLS_FINGERPRINT = cert.fingerprint(hashes.SHA1()).hex(':')
+    ADVERTISED_IP = get_local_ip() # Get the actual local IP or configured IP
     print(f"Satellite ID: {SATELLITE_ID}")
     print(f"TLS Fingerprint: {TLS_FINGERPRINT}")
+    print(f"Advertising IP: {ADVERTISED_IP}")
 
 
 # --- Networking/Protocol Classes ---
@@ -270,8 +296,8 @@ async def watchdog_task():
 async def display_ui():
     HEADER_WIDTH = 54
     while True:
-        # Move cursor to top-left home position instead of clearing screen
         sys.stdout.write('\033[H') 
+        sys.stdout.write('\033[J')
         sys.stdout.flush()
 
         # 1. Satellite Node Status
@@ -323,6 +349,7 @@ async def display_ui():
         print("Satellite ID + TLS Fingerprint".center(HEADER_WIDTH))
         print("=" * HEADER_WIDTH)
         print(f"Satellite ID:          {SATELLITE_ID}")
+        print(f"Advertising IP:        {ADVERTISED_IP}")
         print(f"TLS Fingerprint:       {TLS_FINGERPRINT}")
         print(f"Trusted Satellites:    {len(TRUSTED_SATELLITES)} in list.json")
         print("=" * HEADER_WIDTH)
@@ -335,7 +362,8 @@ async def main():
     load_trusted_satellites() # Load and verify existing trusted list
 
     # Ensure our own satellite info is in the trusted list upon startup
-    add_or_update_satellite(SATELLITE_ID, TLS_FINGERPRINT, LISTEN_HOST, LISTEN_PORT)
+    # Use the dynamically found ADVERTISED_IP here
+    add_or_update_satellite(SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP, LISTEN_PORT)
     # The call above also signs and saves list.json correctly.
 
     ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
@@ -346,7 +374,7 @@ async def main():
         SatelliteProtocol, LISTEN_HOST, LISTEN_PORT, ssl=ssl_context
     )
 
-    print(f"Serving on {LISTEN_HOST}:{LISTEN_PORT} (TLS enabled)...")
+    print(f"Serving on {LISTEN_HOST}:{LISTEN_PORT} (TLS enabled) advertising {ADVERTISED_IP}...")
 
     asyncio.create_task(display_ui())
     asyncio.create_task(watchdog_task())
@@ -359,8 +387,8 @@ async def main():
 if __name__ == '__main__':
     import random
     try:
-        # Clear screen once at very start for clean initial output
-        os.system('clear' if os.name == 'posix' else 'cls') 
+        sys.stdout.write('\033[H')
+        sys.stdout.flush()
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Satellite shutting down.")
