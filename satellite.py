@@ -25,16 +25,67 @@ REPAIR_QUEUE = asyncio.Queue()
 SATELLITE_ID = None
 TLS_FINGERPRINT = None
 ORIGIN_PUBKEY_PEM = None
-ORIGIN_PRIVKEY_PEM = None # We now manage the origin private key as well
+ORIGIN_PRIVKEY_PEM = None
 LIST_JSON_PATH = 'list.json'
 ORIGIN_PUBKEY_PATH = 'origin_pubkey.pem'
-ORIGIN_PRIVKEY_PATH = 'origin_privkey.pem' # Path for new private key file
+ORIGIN_PRIVKEY_PATH = 'origin_privkey.pem'
 CERT_PATH = 'cert.pem'
 KEY_PATH = 'key.pem'
 UI_NOTIFICATIONS = asyncio.Queue(maxsize=10)
+# New state management for the list of trusted satellites
+TRUSTED_SATELLITES = {} # {satellite_id: {fingerprint, hostname, port}}
 
 
 # --- Helper Functions ---
+def add_or_update_satellite(sat_id, fingerprint, hostname, port):
+    """Adds a new satellite to the in-memory list and re-signs/saves the file."""
+    if sat_id not in TRUSTED_SATELLITES:
+        print(f"Adding new satellite to trusted list: {sat_id}")
+        UI_NOTIFICATIONS.put_nowait(f"Added trusted satellite: {sat_id}")
+    
+    TRUSTED_SATELLITES[sat_id] = {
+        "fingerprint": fingerprint,
+        "hostname": hostname,
+        "port": port
+    }
+    sign_and_save_satellite_list()
+
+
+def load_trusted_satellites():
+    """Loads and verifies list.json on startup."""
+    global TRUSTED_SATELLITES
+    if os.path.exists(LIST_JSON_PATH):
+        try:
+            with open(LIST_JSON_PATH, 'r') as f:
+                signed_data = json.load(f)
+            
+            data = signed_data['data']
+            signature = base64.b64decode(signed_data['signature'])
+            json_data_bytes = json.dumps(data, indent=4, sort_keys=True).encode('utf-8')
+
+            # Verify the signature using the origin public key
+            public_key = serialization.load_pem_public_key(ORIGIN_PUBKEY_PEM, backend=default_backend())
+            public_key.verify(
+                signature,
+                json_data_bytes,
+                padding.PSS(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    salt_length=padding.PSS.MAX_LENGTH
+                ),
+                hashes.SHA256()
+            )
+            print(f"Verified signature of existing {LIST_JSON_PATH}.")
+            
+            # Load verified data into memory
+            for sat in data['satellites']:
+                TRUSTED_SATELLITES[sat['id']] = sat
+        
+        except Exception as e:
+            print(f"ERROR: Failed to load or verify {LIST_JSON_PATH}: {e}")
+            # Exit or halt if the trusted list cannot be verified as authentic
+            exit(1)
+
+
 def sign_and_save_satellite_list():
     """
     Generates the list.json with the current satellite's info,
@@ -44,30 +95,21 @@ def sign_and_save_satellite_list():
         print("ERROR: Origin private key not loaded. Cannot sign list.json.")
         return
 
-    # Load the private key object from the PEM bytes
     private_key = serialization.load_pem_private_key(
         ORIGIN_PRIVKEY_PEM,
         password=None,
         backend=default_backend()
     )
 
-    # Data structure for list.json (contains signed data)
+    # Convert in-memory dictionary back into list format for JSON storage
+    satellites_list_formatted = list(TRUSTED_SATELLITES.values())
+    
     satellites_list_data = {
-        "satellites": [
-            {
-                "id": SATELLITE_ID,
-                "fingerprint": TLS_FINGERPRINT,
-                "hostname": LISTEN_HOST,
-                "port": LISTEN_PORT
-            }
-            # More satellites would go here in a multi-satellite setup
-        ]
+        "satellites": satellites_list_formatted
     }
     
-    # Convert data to JSON string for signing
     json_data_bytes = json.dumps(satellites_list_data, indent=4, sort_keys=True).encode('utf-8')
 
-    # Sign the data
     signature = private_key.sign(
         json_data_bytes,
         padding.PSS(
@@ -77,17 +119,15 @@ def sign_and_save_satellite_list():
         hashes.SHA256()
     )
 
-    # Prepare final structure with data and signature
     final_list_structure = {
         "data": satellites_list_data,
         "signature": base64.b64encode(signature).decode('utf-8')
     }
 
-    # Save to list.json
     with open(LIST_JSON_PATH, 'w') as f:
         json.dump(final_list_structure, f, indent=4)
     
-    print(f"Generated and signed {LIST_JSON_PATH}.")
+    print(f"Generated and signed {LIST_JSON_PATH} with {len(TRUSTED_SATELLITES)} entries.")
 
 
 def generate_keys_and_certs():
@@ -114,16 +154,12 @@ def generate_keys_and_certs():
 
     # 2. Generate/Load Origin Pubkey/Privkey
     global ORIGIN_PUBKEY_PEM, ORIGIN_PRIVKEY_PEM
-    
-    # Check for the presence of both parts of the origin key pair
     if not os.path.exists(ORIGIN_PUBKEY_PATH) or not os.path.exists(ORIGIN_PRIVKEY_PATH):
-        print(f"Generating new master origin key pair ({ORIGIN_PUBKEY_PATH} and {ORIGIN_PRIVKEY_PATH})...")
+        print(f"Generating new master origin key pair...")
         origin_priv_key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
         origin_pub_key = origin_priv_key.public_key()
-        
         ORIGIN_PUBKEY_PEM = origin_pub_key.public_bytes(encoding=serialization.Encoding.PEM, format=serialization.PublicFormat.SubjectPublicKeyInfo)
         ORIGIN_PRIVKEY_PEM = origin_priv_key.private_bytes(encoding=serialization.Encoding.PEM, format=serialization.PrivateFormat.TraditionalOpenSSL, encryption_algorithm=serialization.NoEncryption())
-
         with open(ORIGIN_PUBKEY_PATH, "wb") as f:
             f.write(ORIGIN_PUBKEY_PEM)
         with open(ORIGIN_PRIVKEY_PATH, "wb") as f:
@@ -141,9 +177,7 @@ def generate_keys_and_certs():
     with open(CERT_PATH, 'rb') as f:
         cert_data = f.read()
     cert = x509.load_pem_x509_certificate(cert_data, default_backend())
-    # FIX: get_attributes_for_oid returns a list; access the first item in the list and then its value
-    SATELLITE_ID = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
-    # TLS Fingerprint (SHA1 hash of the DER encoding of the cert) - remains stable if cert file doesn't change
+    SATELLITE_ID = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value # Fixed index access
     TLS_FINGERPRINT = cert.fingerprint(hashes.SHA1()).hex(':')
     print(f"Satellite ID: {SATELLITE_ID}")
     print(f"TLS Fingerprint: {TLS_FINGERPRINT}")
@@ -170,7 +204,7 @@ class SatelliteProtocol(asyncio.Protocol):
             command, *args = message.split(' ', 1)
             
             if command == "REGISTER" and args:
-                node_info = json.loads(args[0])
+                node_info = json.loads(args)
                 self.node_id = node_info.get('node_id')
                 if self.node_id not in NODES:
                     NODES[self.node_id] = {'writer': self.transport, 'last_seen': time.time(), 'uptime_start': time.time()}
@@ -283,20 +317,23 @@ async def display_ui():
         print("=" * HEADER_WIDTH)
         print("No suspicious activity detected.")
 
-        # 5. Satellite ID + TLS Fingerprint
+        # 5. Satellite ID + TLS Fingerprint + Trusted List Summary
         print("\n" + "=" * HEADER_WIDTH)
         print("Satellite ID + TLS Fingerprint".center(HEADER_WIDTH))
         print("=" * HEADER_WIDTH)
-        print(f"Satellite ID:    {SATELLITE_ID}")
-        print(f"TLS Fingerprint: {TLS_FINGERPRINT}")
+        print(f"Satellite ID:          {SATELLITE_ID}")
+        print(f"TLS Fingerprint:       {TLS_FINGERPRINT}")
+        print(f"Trusted Satellites:    {len(TRUSTED_SATELLITES)} in list.json")
         print("=" * HEADER_WIDTH)
-
-        await asyncio.sleep(1)
 
 
 async def main():
     generate_keys_and_certs() # Setup keys/certs on startup
-    sign_and_save_satellite_list() # Create the signed list.json
+    load_trusted_satellites() # Load and verify existing trusted list
+
+    # Ensure our own satellite info is in the trusted list upon startup
+    add_or_update_satellite(SATELLITE_ID, TLS_FINGERPRINT, LISTEN_HOST, LISTEN_PORT)
+    # The call above also signs and saves list.json correctly.
 
     ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     ssl_context.load_cert_chain(certfile=CERT_PATH, keyfile=KEY_PATH)
