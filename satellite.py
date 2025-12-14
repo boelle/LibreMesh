@@ -42,7 +42,7 @@ KEY_PATH = 'key.pem'
 UI_NOTIFICATIONS = asyncio.Queue(maxsize=10)
 TRUSTED_SATELLITES = {}
 ADVERTISED_IP = None
-LIST_UPDATED_PENDING_SAVE = False # New flag to track updates
+LIST_UPDATED_PENDING_SAVE = False
 
 
 # --- Helper Functions ---
@@ -69,23 +69,23 @@ def add_or_update_satellite(sat_id, fingerprint, hostname, port):
     if not IS_ORIGIN:
         return
 
-    if sat_id not in TRUSTED_SATELLITES:
-        print(f"New satellite added in memory: {sat_id}")
-        UI_NOTIFICATIONS.put_nowait(f"Added trusted satellite: {sat_id}")
-        LIST_UPDATED_PENDING_SAVE = True # We need to save the file
-    
-    # Check if any details changed, even if ID exists
-    current = TRUSTED_SATELLITES.get(sat_id)
-    if current and (current['fingerprint'] != fingerprint or current['hostname'] != hostname or current['port'] != port):
-        LIST_UPDATED_PENDING_SAVE = True
-        print(f"Satellite details updated in memory: {sat_id}")
-
-    TRUSTED_SATELLITES[sat_id] = {
+    new_details = {
         "fingerprint": fingerprint,
         "hostname": hostname,
         "port": port
     }
-    # We no longer call sign_and_save_satellite_list() directly here.
+    
+    if sat_id not in TRUSTED_SATELLITES:
+        print(f"New satellite added in memory: {sat_id}")
+        UI_NOTIFICATIONS.put_nowait(f"Added trusted satellite: {sat_id}")
+        LIST_UPDATED_PENDING_SAVE = True
+    else:
+        # Check if existing details are identical to the new details
+        if TRUSTED_SATELLITES[sat_id] != new_details:
+            print(f"Satellite details updated in memory: {sat_id}")
+            LIST_UPDATED_PENDING_SAVE = True
+    
+    TRUSTED_SATELLITES[sat_id] = new_details
 
 
 def load_trusted_satellites():
@@ -130,8 +130,8 @@ def sign_and_save_satellite_list():
     with open(LIST_JSON_PATH, 'w') as f:
         json.dump(final_list_structure, f, indent=4, separators=(',', ': '))
     
-    print(f"Generated and signed {LIST_JSON_PATH} with {len(TRUSTED_SATELLITES)} entries.")
-    LIST_UPDATED_PENDING_SAVE = False # Reset the flag after successful save
+    # print(f"Generated and signed {LIST_JSON_PATH} with {len(TRUSTED_SATELLITES)} entries.")
+    LIST_UPDATED_PENDING_SAVE = False
 
 
 def generate_keys_and_certs():
@@ -183,7 +183,7 @@ def generate_keys_and_certs():
     cert = x509.load_pem_x509_certificate(cert_data, default_backend())
     cn_attributes = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
     if cn_attributes:
-        SATELLITE_ID = cn_attributes[0].value # Access list element
+        SATELLITE_ID = cn_attributes.value
     else:
         SATELLITE_ID = "Unknown_Satellite_ID"
     TLS_FINGERPRINT = cert.fingerprint(hashes.SHA1()).hex(':')
@@ -200,7 +200,7 @@ class SatelliteProtocol(asyncio.Protocol):
         self.last_seen = time.time()
         self.uptime_start = time.time()
         self.transport = None
-
+    # ... (rest of class omitted for brevity, identical to previous version) ...
     def connection_made(self, transport):
         self.transport = transport
 
@@ -243,6 +243,7 @@ class SatelliteProtocol(asyncio.Protocol):
 
 # --- Background Tasks ---
 async def audit_and_queue_repairs():
+    # ... (rest of code omitted for brevity, identical to previous version) ...
     while True:
         await asyncio.sleep(45)
         if random.random() > 0.8 and REPAIR_QUEUE.empty():
@@ -257,6 +258,7 @@ async def audit_and_queue_repairs():
             await REPAIR_QUEUE.put(job)
 
 async def repair_worker():
+    # ... (rest of code omitted for brevity, identical to previous version) ...
     while True:
         job = await REPAIR_QUEUE.get()
         try:
@@ -270,6 +272,7 @@ async def repair_worker():
             REPAIR_QUEUE.task_done()
 
 async def watchdog_task():
+    # ... (rest of code omitted for brevity, identical to previous version) ...
     while True:
         await asyncio.sleep(1)
         current_time = time.time()
@@ -279,6 +282,7 @@ async def watchdog_task():
 
 
 async def display_ui():
+    # ... (rest of code omitted for brevity, identical to previous version) ...
     HEADER_WIDTH = 54
     while True:
         sys.stdout.write('\033[H') 
@@ -355,8 +359,8 @@ async def main():
         sign_and_save_satellite_list()
         print("list.json updated and saved to disk.")
     else:
-        print("list.json is up to date. No disk write needed.")
-
+        # print("list.json is up to date. No disk write needed.")
+        pass # Keep console clean
 
     ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     ssl_context.load_cert_chain(certfile=CERT_PATH, keyfile=KEY_PATH)
