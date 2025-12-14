@@ -22,8 +22,6 @@ LISTEN_PORT = 8888
 NODE_TIMEOUT = 60 # seconds
 
 # --- NEW CONFIGURATION VARIABLE ---
-# Uncomment the line below and set your static public/external IP when needed.
-# If left commented, the script will automatically detect the local IP.
 ADVERTISED_IP_CONFIG = '192.168.0.163' 
 # ADVERTISED_IP_CONFIG = None 
 
@@ -34,6 +32,7 @@ SATELLITE_ID = None
 TLS_FINGERPRINT = None
 ORIGIN_PUBKEY_PEM = None
 ORIGIN_PRIVKEY_PEM = None
+IS_ORIGIN = False # Flag to determine if this instance is the origin satellite
 LIST_JSON_PATH = 'list.json'
 ORIGIN_PUBKEY_PATH = 'origin_pubkey.pem'
 ORIGIN_PRIVKEY_PATH = 'origin_privkey.pem'
@@ -50,7 +49,7 @@ def get_local_ip():
     Attempts to determine the non-loopback local IP address, or uses configured IP.
     """
     if ADVERTISED_IP_CONFIG:
-        return ADVERTISED_IP_CONFIG # Use the manually configured IP if provided
+        return ADVERTISED_IP_CONFIG
 
     s = None
     try:
@@ -66,7 +65,11 @@ def get_local_ip():
 
 
 def add_or_update_satellite(sat_id, fingerprint, hostname, port):
-    """Adds a new satellite to the in-memory list and re-signs/saves the file."""
+    """Adds a new satellite to the in-memory list and re-signs/saves the file IF this is the origin."""
+    if not IS_ORIGIN:
+        print("INFO: Cannot add/update satellite. This instance is not the Origin satellite.")
+        return
+
     if sat_id not in TRUSTED_SATELLITES:
         print(f"Adding new satellite to trusted list: {sat_id}")
         UI_NOTIFICATIONS.put_nowait(f"Added trusted satellite: {sat_id}")
@@ -115,9 +118,12 @@ def sign_and_save_satellite_list():
     """
     Generates the list.json with the current satellite's info,
     signs it using the origin private key, and saves the file.
+    Only runs if IS_ORIGIN is True.
     """
-    if not ORIGIN_PRIVKEY_PEM:
-        print("ERROR: Origin private key not loaded. Cannot sign list.json.")
+    if not IS_ORIGIN or not ORIGIN_PRIVKEY_PEM:
+        # This function should only be called if IS_ORIGIN is True, 
+        # so this check is a safeguard.
+        print("ERROR: Not the origin satellite. Cannot sign list.json.")
         return
 
     private_key = serialization.load_pem_private_key(
@@ -156,19 +162,15 @@ def sign_and_save_satellite_list():
 
 def generate_keys_and_certs():
     """Generates satellite keys and origin pubkey/privkey if missing."""
+    global ORIGIN_PUBKEY_PEM, ORIGIN_PRIVKEY_PEM, IS_ORIGIN
     print("Checking for existing keys and certificates...")
     
-    # 1. Generate/Load Satellite TLS Key and Cert
+    # ... (Satellite Cert Generation code omitted for brevity) ...
     if not os.path.exists(CERT_PATH) or not os.path.exists(KEY_PATH):
-        # ... (key generation code omitted for brevity, identical to previous version) ...
         print("Generating new satellite cert.pem and key.pem...")
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
-        subject = issuer = x509.Name([
-            x509.NameAttribute(NameOID.COUNTRY_NAME, u"US"),
-            x509.NameAttribute(NameOID.COMMON_NAME, u"localhost"),
-        ])
+        subject = issuer = x509.Name([x509.NameAttribute(NameOID.COUNTRY_NAME, u"US"), x509.NameAttribute(NameOID.COMMON_NAME, u"localhost"),])
         cert = x509.CertificateBuilder().subject_name(subject).issuer_name(issuer).public_key(key.public_key()).serial_number(x509.random_serial_number()).not_valid_before(datetime.utcnow()).not_valid_after(datetime.utcnow() + timedelta(days=3650)).add_extension(x509.SubjectAlternativeName([x509.DNSName(u"localhost")]), critical=False,).sign(private_key=key, algorithm=hashes.SHA256(), backend=default_backend())
-
         with open(KEY_PATH, "wb") as f:
             f.write(key.private_bytes(encoding=serialization.Encoding.PEM, format=serialization.PrivateFormat.TraditionalOpenSSL, encryption_algorithm=serialization.NoEncryption()))
         with open(CERT_PATH, "wb") as f:
@@ -178,10 +180,9 @@ def generate_keys_and_certs():
         print("Reusing existing satellite cert.pem and key.pem.")
 
     # 2. Generate/Load Origin Pubkey/Privkey
-    global ORIGIN_PUBKEY_PEM, ORIGIN_PRIVKEY_PEM
     if not os.path.exists(ORIGIN_PUBKEY_PATH) or not os.path.exists(ORIGIN_PRIVKEY_PATH):
-        # ... (origin key generation code omitted for brevity, identical to previous version) ...
-        print(f"Generating new master origin key pair...")
+        print(f"Generating new master origin key pair. THIS INSTANCE IS NOW THE ORIGIN.")
+        IS_ORIGIN = True # We just created it, so we are the origin.
         origin_priv_key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
         origin_pub_key = origin_priv_key.public_key()
         ORIGIN_PUBKEY_PEM = origin_pub_key.public_bytes(encoding=serialization.Encoding.PEM, format=serialization.PublicFormat.SubjectPublicKeyInfo)
@@ -192,21 +193,29 @@ def generate_keys_and_certs():
             f.write(ORIGIN_PRIVKEY_PEM)
         print("Master origin keys generated and saved.")
     else:
+        print("Reusing existing master origin keys.")
         with open(ORIGIN_PUBKEY_PATH, "rb") as f:
             ORIGIN_PUBKEY_PEM = f.read().strip()
         with open(ORIGIN_PRIVKEY_PATH, "rb") as f:
             ORIGIN_PRIVKEY_PEM = f.read().strip()
-        print("Reusing existing master origin keys.")
-    
+        
+        # Check if we have the private key to confirm IS_ORIGIN status
+        try:
+            serialization.load_pem_private_key(ORIGIN_PRIVKEY_PEM, password=None, backend=default_backend())
+            IS_ORIGIN = True
+            print("Private origin key loaded. This instance is the Origin satellite.")
+        except ValueError:
+            IS_ORIGIN = False
+            print("Private origin key not found/valid. This instance is a Replica satellite.")
+
     # 3. Derive Satellite ID and Fingerprint (must be stable)
     global SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP
     with open(CERT_PATH, 'rb') as f:
         cert_data = f.read()
     cert = x509.load_pem_x509_certificate(cert_data, default_backend())
-    # FIX IS HERE: Access the first element of the list returned by get_attributes_for_oid()
-    SATELLITE_ID = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value 
+    SATELLITE_ID = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME).value
     TLS_FINGERPRINT = cert.fingerprint(hashes.SHA1()).hex(':')
-    ADVERTISED_IP = get_local_ip() # Get the actual local IP or configured IP
+    ADVERTISED_IP = get_local_ip()
     print(f"Satellite ID: {SATELLITE_ID}")
     print(f"TLS Fingerprint: {TLS_FINGERPRINT}")
     print(f"Advertising IP: {ADVERTISED_IP}")
@@ -214,7 +223,6 @@ def generate_keys_and_certs():
 
 # --- Networking/Protocol Classes ---
 class SatelliteProtocol(asyncio.Protocol):
-    # ... (rest of class omitted for brevity, identical to previous version) ...
     def __init__(self):
         self.node_id = None
         self.last_seen = time.time()
@@ -247,7 +255,7 @@ class SatelliteProtocol(asyncio.Protocol):
                 pass
             
             elif command == "REPAIR_REQUEST":
-                pass # Ignored as satellite handles initiation internally now
+                pass
 
             else:
                 print(f"Unknown command or no node ID: {command}")
@@ -258,12 +266,11 @@ class SatelliteProtocol(asyncio.Protocol):
             print(f"Error handling message: {e}")
 
     def connection_lost(self, exc):
-        pass # Watchdog handles timeouts
+        pass
 
 
 # --- Background Tasks ---
 async def audit_and_queue_repairs():
-    # ... (function body omitted for brevity, identical to previous version) ...
     while True:
         await asyncio.sleep(45)
         if random.random() > 0.8 and REPAIR_QUEUE.empty():
@@ -278,13 +285,12 @@ async def audit_and_queue_repairs():
             await REPAIR_QUEUE.put(job)
 
 async def repair_worker():
-    # ... (function body omitted for brevity, identical to previous version) ...
     while True:
         job = await REPAIR_QUEUE.get()
         try:
             job["status"] = "CLAIMED"
             job["claimed_by"] = SATELLITE_ID
-            await asyncio.sleep(5)
+            await asyncio.sleep(5) 
             await UI_NOTIFICATIONS.put(f"[WORKER] Repair completed: {job['fragment_id']} for node {job['requested_by_node_id']}")
         except Exception as e:
             print(f"Error processing repair job: {e}")
@@ -292,7 +298,6 @@ async def repair_worker():
             REPAIR_QUEUE.task_done()
 
 async def watchdog_task():
-    # ... (function body omitted for brevity, identical to previous version) ...
     while True:
         await asyncio.sleep(1)
         current_time = time.time()
@@ -302,10 +307,9 @@ async def watchdog_task():
 
 
 async def display_ui():
-    # ... (function body omitted for brevity, identical to previous version) ...
     HEADER_WIDTH = 54
     while True:
-        sys.stdout.write('\033[H')
+        sys.stdout.write('\033[H') 
         sys.stdout.write('\033[J')
         sys.stdout.flush()
 
@@ -359,6 +363,7 @@ async def display_ui():
         print("=" * HEADER_WIDTH)
         print(f"Satellite ID:          {SATELLITE_ID}")
         print(f"Advertising IP:        {ADVERTISED_IP}")
+        print(f"Origin Status:         {'ORIGIN' if IS_ORIGIN else 'REPLICA'} ")
         print(f"TLS Fingerprint:       {TLS_FINGERPRINT}")
         print(f"Trusted Satellites:    {len(TRUSTED_SATELLITES)} in list.json")
         print("=" * HEADER_WIDTH)
@@ -371,9 +376,8 @@ async def main():
     load_trusted_satellites() # Load and verify existing trusted list
 
     # Ensure our own satellite info is in the trusted list upon startup
-    # Use the dynamically found ADVERTISED_IP here
+    # This function now checks IS_ORIGIN internally before attempting to sign/save
     add_or_update_satellite(SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP, LISTEN_PORT)
-    # The call above also signs and saves list.json correctly.
 
     ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     ssl_context.load_cert_chain(certfile=CERT_PATH, keyfile=KEY_PATH)
