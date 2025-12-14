@@ -42,6 +42,7 @@ KEY_PATH = 'key.pem'
 UI_NOTIFICATIONS = asyncio.Queue(maxsize=10)
 TRUSTED_SATELLITES = {}
 ADVERTISED_IP = None
+LIST_UPDATED_PENDING_SAVE = False # New flag to track updates
 
 
 # --- Helper Functions ---
@@ -63,84 +64,81 @@ def get_local_ip():
 
 
 def add_or_update_satellite(sat_id, fingerprint, hostname, port):
-    """Adds a new satellite to the in-memory list and re-signs/saves the file IF this is the origin."""
+    """Adds a new satellite to the in-memory list and flags a save if this is the origin."""
+    global LIST_UPDATED_PENDING_SAVE
     if not IS_ORIGIN:
-        # print("INFO: Cannot add/update satellite. This instance is not the Origin satellite.")
         return
 
     if sat_id not in TRUSTED_SATELLITES:
-        # print(f"Adding new satellite to trusted list: {sat_id}")
+        print(f"New satellite added in memory: {sat_id}")
         UI_NOTIFICATIONS.put_nowait(f"Added trusted satellite: {sat_id}")
+        LIST_UPDATED_PENDING_SAVE = True # We need to save the file
     
+    # Check if any details changed, even if ID exists
+    current = TRUSTED_SATELLITES.get(sat_id)
+    if current and (current['fingerprint'] != fingerprint or current['hostname'] != hostname or current['port'] != port):
+        LIST_UPDATED_PENDING_SAVE = True
+        print(f"Satellite details updated in memory: {sat_id}")
+
     TRUSTED_SATELLITES[sat_id] = {
         "fingerprint": fingerprint,
         "hostname": hostname,
         "port": port
     }
-    sign_and_save_satellite_list()
+    # We no longer call sign_and_save_satellite_list() directly here.
 
 
 def load_trusted_satellites():
     """Loads and verifies list.json on startup. Handles errors gracefully."""
     global TRUSTED_SATELLITES
-    TRUSTED_SATELLITES = {} # Start with a clean slate in memory
+    TRUSTED_SATELLITES = {}
     if os.path.exists(LIST_JSON_PATH):
         try:
             with open(LIST_JSON_PATH, 'r') as f:
                 signed_data = json.load(f)
-            
             data = signed_data['data']
             signature = base64.b64decode(signed_data['signature'])
             json_data_bytes = json.dumps(data, indent=4, sort_keys=True).encode('utf-8')
-
             public_key = serialization.load_pem_public_key(ORIGIN_PUBKEY_PEM, backend=default_backend())
-            public_key.verify(
-                signature,
-                json_data_bytes,
-                padding.PSS(
-                    mgf=padding.MGF1(hashes.SHA256()),
-                    salt_length=padding.PSS.MAX_LENGTH
-                ),
-                hashes.SHA256()
-            )
+            public_key.verify(signature, json_data_bytes, padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH), hashes.SHA256())
             print(f"Verified signature of existing {LIST_JSON_PATH}.")
             
             for sat in data['satellites']:
-                # Ensure structure is correct before adding to our runtime memory
                 if 'id' in sat and 'fingerprint' in sat and 'hostname' in sat and 'port' in sat:
                     TRUSTED_SATELLITES[sat['id']] = sat
                 else:
                     raise ValueError("Malformed satellite entry in list.json")
-        
         except Exception as e:
             print(f"WARNING: Failed to load or verify {LIST_JSON_PATH}: {e}")
-            print(f"A new, correct {LIST_JSON_PATH} will be generated on startup.")
-            # We don't exit(1) anymore, we just continue with an empty list which will be overwritten shortly.
+            print(f"Starting with empty trusted list. A new file will be generated if Origin.")
 
 
 def sign_and_save_satellite_list():
     """Generates and signs the list.json file if this is the origin."""
+    global LIST_UPDATED_PENDING_SAVE
     if not IS_ORIGIN or not ORIGIN_PRIVKEY_PEM:
         print("ERROR: Not the origin satellite. Cannot sign list.json.")
         return
-    # ... (signing logic remains the same) ...
+
     private_key = serialization.load_pem_private_key(ORIGIN_PRIVKEY_PEM, password=None, backend=default_backend())
     satellites_list_formatted = list(TRUSTED_SATELLITES.values())
     satellites_list_data = {"satellites": satellites_list_formatted}
     json_data_bytes = json.dumps(satellites_list_data, indent=4, sort_keys=True).encode('utf-8')
     signature = private_key.sign(json_data_bytes, padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH), hashes.SHA256())
     final_list_structure = {"data": satellites_list_data, "signature": base64.b64encode(signature).decode('utf-8')}
+
     with open(LIST_JSON_PATH, 'w') as f:
         json.dump(final_list_structure, f, indent=4, separators=(',', ': '))
     
-    # print(f"Generated and signed {LIST_JSON_PATH} with {len(TRUSTED_SATELLITES)} entries.")
+    print(f"Generated and signed {LIST_JSON_PATH} with {len(TRUSTED_SATELLITES)} entries.")
+    LIST_UPDATED_PENDING_SAVE = False # Reset the flag after successful save
 
 
 def generate_keys_and_certs():
     """Generates satellite keys and origin pubkey/privkey if missing."""
-    global ORIGIN_PUBKEY_PEM, ORIGIN_PRIVKEY_PEM, IS_ORIGIN
-    # ... (rest of function omitted for brevity, identical to previous version) ...
+    global ORIGIN_PUBKEY_PEM, ORIGIN_PRIVKEY_PEM, IS_ORIGIN, SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP
     print("Checking for existing keys and certificates...")
+    
     if not os.path.exists(CERT_PATH) or not os.path.exists(KEY_PATH):
         print("Generating new satellite cert.pem and key.pem...")
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
@@ -172,7 +170,6 @@ def generate_keys_and_certs():
             ORIGIN_PUBKEY_PEM = f.read().strip()
         with open(ORIGIN_PRIVKEY_PATH, "rb") as f:
             ORIGIN_PRIVKEY_PEM = f.read().strip()
-        
         try:
             serialization.load_pem_private_key(ORIGIN_PRIVKEY_PEM, password=None, backend=default_backend())
             IS_ORIGIN = True
@@ -181,17 +178,14 @@ def generate_keys_and_certs():
             IS_ORIGIN = False
             print("Private origin key not found/valid. This instance is a Replica satellite.")
 
-    global SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP
     with open(CERT_PATH, 'rb') as f:
         cert_data = f.read()
     cert = x509.load_pem_x509_certificate(cert_data, default_backend())
-    # FIX: Ensure SATELLITE_ID is a string, not a list of strings
     cn_attributes = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
     if cn_attributes:
-        SATELLITE_ID = cn_attributes[0].value
+        SATELLITE_ID = cn_attributes[0].value # Access list element
     else:
         SATELLITE_ID = "Unknown_Satellite_ID"
-        
     TLS_FINGERPRINT = cert.fingerprint(hashes.SHA1()).hex(':')
     ADVERTISED_IP = get_local_ip()
     print(f"Satellite ID: {SATELLITE_ID}")
@@ -201,7 +195,6 @@ def generate_keys_and_certs():
 
 # --- Networking/Protocol Classes ---
 class SatelliteProtocol(asyncio.Protocol):
-    # ... (rest of code omitted for brevity) ...
     def __init__(self):
         self.node_id = None
         self.last_seen = time.time()
@@ -250,7 +243,6 @@ class SatelliteProtocol(asyncio.Protocol):
 
 # --- Background Tasks ---
 async def audit_and_queue_repairs():
-    # ... (rest of code omitted for brevity) ...
     while True:
         await asyncio.sleep(45)
         if random.random() > 0.8 and REPAIR_QUEUE.empty():
@@ -265,7 +257,6 @@ async def audit_and_queue_repairs():
             await REPAIR_QUEUE.put(job)
 
 async def repair_worker():
-    # ... (rest of code omitted for brevity) ...
     while True:
         job = await REPAIR_QUEUE.get()
         try:
@@ -279,7 +270,6 @@ async def repair_worker():
             REPAIR_QUEUE.task_done()
 
 async def watchdog_task():
-    # ... (rest of code omitted for brevity) ...
     while True:
         await asyncio.sleep(1)
         current_time = time.time()
@@ -289,7 +279,6 @@ async def watchdog_task():
 
 
 async def display_ui():
-    # ... (rest of code omitted for brevity) ...
     HEADER_WIDTH = 54
     while True:
         sys.stdout.write('\033[H') 
@@ -359,8 +348,15 @@ async def main():
     load_trusted_satellites() # Load and verify existing trusted list
 
     # Ensure our own satellite info is in the trusted list upon startup
-    # This function now checks IS_ORIGIN internally before attempting to sign/save
     add_or_update_satellite(SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP, LISTEN_PORT)
+
+    # NEW: Only save the list to disk IF changes were made during startup
+    if LIST_UPDATED_PENDING_SAVE:
+        sign_and_save_satellite_list()
+        print("list.json updated and saved to disk.")
+    else:
+        print("list.json is up to date. No disk write needed.")
+
 
     ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     ssl_context.load_cert_chain(certfile=CERT_PATH, keyfile=KEY_PATH)
