@@ -20,11 +20,12 @@ from datetime import datetime, timedelta
 LISTEN_HOST = '0.0.0.0'
 LISTEN_PORT = 8888
 NODE_TIMEOUT = 60 # seconds
+
 # --- NEW CONFIGURATION VARIABLE ---
 # Uncomment the line below and set your static public/external IP when needed.
 # If left commented, the script will automatically detect the local IP.
-# ADVERTISED_IP_CONFIG = 'your.external.ip.address' 
-ADVERTISED_IP_CONFIG = None 
+ADVERTISED_IP_CONFIG = '192.168.0.163' 
+# ADVERTISED_IP_CONFIG = None 
 
 
 NODES = {}
@@ -40,13 +41,13 @@ CERT_PATH = 'cert.pem'
 KEY_PATH = 'key.pem'
 UI_NOTIFICATIONS = asyncio.Queue(maxsize=10)
 TRUSTED_SATELLITES = {}
-ADVERTISED_IP = None 
+ADVERTISED_IP = None
 
 
 # --- Helper Functions ---
 def get_local_ip():
     """
-    Attempts to determine the non-loopback local IP address.
+    Attempts to determine the non-loopback local IP address, or uses configured IP.
     """
     if ADVERTISED_IP_CONFIG:
         return ADVERTISED_IP_CONFIG # Use the manually configured IP if provided
@@ -159,6 +160,7 @@ def generate_keys_and_certs():
     
     # 1. Generate/Load Satellite TLS Key and Cert
     if not os.path.exists(CERT_PATH) or not os.path.exists(KEY_PATH):
+        # ... (key generation code omitted for brevity, identical to previous version) ...
         print("Generating new satellite cert.pem and key.pem...")
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
         subject = issuer = x509.Name([
@@ -178,6 +180,7 @@ def generate_keys_and_certs():
     # 2. Generate/Load Origin Pubkey/Privkey
     global ORIGIN_PUBKEY_PEM, ORIGIN_PRIVKEY_PEM
     if not os.path.exists(ORIGIN_PUBKEY_PATH) or not os.path.exists(ORIGIN_PRIVKEY_PATH):
+        # ... (origin key generation code omitted for brevity, identical to previous version) ...
         print(f"Generating new master origin key pair...")
         origin_priv_key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
         origin_pub_key = origin_priv_key.public_key()
@@ -200,7 +203,8 @@ def generate_keys_and_certs():
     with open(CERT_PATH, 'rb') as f:
         cert_data = f.read()
     cert = x509.load_pem_x509_certificate(cert_data, default_backend())
-    SATELLITE_ID = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME).value
+    # FIX IS HERE: Access the first element of the list returned by get_attributes_for_oid()
+    SATELLITE_ID = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value 
     TLS_FINGERPRINT = cert.fingerprint(hashes.SHA1()).hex(':')
     ADVERTISED_IP = get_local_ip() # Get the actual local IP or configured IP
     print(f"Satellite ID: {SATELLITE_ID}")
@@ -210,6 +214,7 @@ def generate_keys_and_certs():
 
 # --- Networking/Protocol Classes ---
 class SatelliteProtocol(asyncio.Protocol):
+    # ... (rest of class omitted for brevity, identical to previous version) ...
     def __init__(self):
         self.node_id = None
         self.last_seen = time.time()
@@ -258,6 +263,7 @@ class SatelliteProtocol(asyncio.Protocol):
 
 # --- Background Tasks ---
 async def audit_and_queue_repairs():
+    # ... (function body omitted for brevity, identical to previous version) ...
     while True:
         await asyncio.sleep(45)
         if random.random() > 0.8 and REPAIR_QUEUE.empty():
@@ -272,12 +278,13 @@ async def audit_and_queue_repairs():
             await REPAIR_QUEUE.put(job)
 
 async def repair_worker():
+    # ... (function body omitted for brevity, identical to previous version) ...
     while True:
         job = await REPAIR_QUEUE.get()
         try:
             job["status"] = "CLAIMED"
             job["claimed_by"] = SATELLITE_ID
-            await asyncio.sleep(5) 
+            await asyncio.sleep(5)
             await UI_NOTIFICATIONS.put(f"[WORKER] Repair completed: {job['fragment_id']} for node {job['requested_by_node_id']}")
         except Exception as e:
             print(f"Error processing repair job: {e}")
@@ -285,6 +292,7 @@ async def repair_worker():
             REPAIR_QUEUE.task_done()
 
 async def watchdog_task():
+    # ... (function body omitted for brevity, identical to previous version) ...
     while True:
         await asyncio.sleep(1)
         current_time = time.time()
@@ -294,9 +302,10 @@ async def watchdog_task():
 
 
 async def display_ui():
+    # ... (function body omitted for brevity, identical to previous version) ...
     HEADER_WIDTH = 54
     while True:
-        sys.stdout.write('\033[H') 
+        sys.stdout.write('\033[H')
         sys.stdout.write('\033[J')
         sys.stdout.flush()
 
