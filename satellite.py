@@ -141,7 +141,7 @@ class Satellite:
             print(f"| {n:<46} |")
         print("+------------------------------------------------+\n")
 
-        # Suspicious IPs advisory — FIXED LAST SEEN
+        # Suspicious IPs advisory
         print("+-----------------------------------------------+")
         print("|               Suspicious IPs Advisory        |")
         print("+------------+------------+---------+----------+")
@@ -149,7 +149,7 @@ class Satellite:
         print("+------------+------------+---------+----------+")
         now = time.time()
         for ip, info in self.advisory_ips.items():
-            last_seen_sec = int(now - info.last_seen)  # fixed
+            last_seen_sec = int(now - info.last_seen)  # seconds since last activity
             penalty = int(max(0, info.penalty_until - now))
             print(f"| {ip:<10} | {info.connections:<10} | {penalty:<7} | {last_seen_sec:<8} |")
         print("+-----------------------------------------------+\n")
@@ -201,13 +201,6 @@ class Satellite:
                     line = line_bytes.decode().strip()
                     now = time.time()
 
-                    # Update advisory_ips without overwriting
-                    if peer not in self.advisory_ips:
-                        self.advisory_ips[peer] = SuspiciousIP(ip=peer, last_seen=now, connections=1)
-                    else:
-                        self.advisory_ips[peer].last_seen = now
-                        self.advisory_ips[peer].connections = self.ip_connection_count[peer]
-
                     if line.startswith("IDENT:"):
                         _, node_id, region, _pub = line.split(":", 3)
                         if node_id in self.nodes:
@@ -222,13 +215,17 @@ class Satellite:
                         _, node_id, region, uptime = line.split(":")
                         if node_id in self.nodes:
                             n = self.nodes[node_id]
-                            try:
-                                n.uptime = int(uptime.strip())
-                            except Exception:
-                                self.notify(f"Failed to parse uptime from {line}:\n{traceback.format_exc()}")
-                            n.last_seen = time.time()
+                            n.uptime = int(uptime.strip())
+                            n.last_seen = time.time()  # update only on heartbeat
                             n.writer = writer
                             self.ui_dirty.set()
+
+                            # update advisory_ips based on heartbeat
+                            if peer not in self.advisory_ips:
+                                self.advisory_ips[peer] = SuspiciousIP(ip=peer, last_seen=n.last_seen, connections=1)
+                            else:
+                                self.advisory_ips[peer].last_seen = n.last_seen
+                                self.advisory_ips[peer].connections = self.ip_connection_count[peer]
 
                     elif line.startswith("REPAIR:"):
                         _, node_id, fragment = line.split(":")
