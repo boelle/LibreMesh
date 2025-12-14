@@ -1,168 +1,149 @@
 #!/usr/bin/env python3
 import asyncio
-import ssl
 import os
+import ssl
+import hashlib
 import time
-import json
-from collections import deque, defaultdict
+from collections import deque
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
 
 # Config
-NODE_PORT = 4001
-HANDSHAKE_TIMEOUT = 10
-HEARTBEAT_INTERVAL = 30
-MAX_NOTIFICATION = 50
-TARGET_UPTIME = 86400  # 24h in seconds for full rank
+HOST = "0.0.0.0"
+PORT = 4001
+KEY_FILE = "satellite_key.pem"
+CERT_FILE = "satellite_cert.pem"
+HEARTBEAT_TIMEOUT = 120  # seconds
 
-# Paths
-CERT_FILE = "cert.pem"
-KEY_FILE = "key.pem"
-ORIGIN_LIST_URL = "https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/trusted-satellites/list.json"
+# UI settings
+UI_REFRESH = 1  # seconds
 
-# Data classes
 class Node:
-    def __init__(self, node_id, region, public_key):
+    def __init__(self, node_id, region):
         self.node_id = node_id
         self.region = region
-        self.public_key = public_key
+        self.rank = 100
         self.uptime = 0
-        self.rank = 0
-        self.last_seen = 0
-        self.first_seen = time.time()
-        self.total_online_time = 0
-        self.online = True
         self.fragments = []
-
-class RepairJob:
-    def __init__(self, fragment, requested_by):
-        self.fragment = fragment
-        self.requested_by = requested_by
-        self.claimed_by = None
+        self.last_seen = 0
+        self.online_time = 0
+        self.last_activity_ts = time.time()
+        self.connection = None
 
 class Satellite:
     def __init__(self):
         self.nodes = {}
-        self.repairs = deque()
-        self.notifications = deque(maxlen=MAX_NOTIFICATION)
-        self.suspicious_ips = defaultdict(lambda: {"connections":0, "penalty":0, "last_seen":0})
-        self.load_keys()
-        self.ssl_context = self.create_ssl_context()
+        self.repair_queue = deque()
+        self.notifications = deque(maxlen=10)
+        self.suspicious_ips = {}
+        self.fingerprint = self.ensure_keys()
+        self.id = self.fingerprint[:8]
 
-    def load_keys(self):
-        if not os.path.exists(KEY_FILE) or not os.path.exists(CERT_FILE):
-            self.create_self_signed_cert()
-        self.fingerprint = self.calculate_fingerprint(KEY_FILE)
-        print(f"Satellite TLS fingerprint: {self.fingerprint}")
-
-    def create_ssl_context(self):
-        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-        context.load_cert_chain(CERT_FILE, KEY_FILE)
-        return context
-
-    def create_self_signed_cert(self):
-        # For simplicity: generate key only, not a real X509 cert
-        key = ed25519.Ed25519PrivateKey.generate()
-        with open(KEY_FILE, "wb") as f:
-            f.write(key.private_bytes(
-                encoding=serialization.Encoding.Raw,
-                format=serialization.PrivateFormat.Raw,
-                encryption_algorithm=serialization.NoEncryption()
-            ))
-        # Create dummy cert.pem (empty file for placeholder)
-        with open(CERT_FILE, "wb") as f:
-            f.write(b"")  # Placeholder
-        print("Generated new key and cert files.")
-
-    def calculate_fingerprint(self, keyfile):
-        with open(keyfile, "rb") as f:
-            key_bytes = f.read()
-        return key_bytes.hex()
+    def ensure_keys(self):
+        # Create key if missing
+        if not os.path.exists(KEY_FILE):
+            key = ed25519.Ed25519PrivateKey.generate()
+            with open(KEY_FILE, "wb") as f:
+                f.write(key.private_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PrivateFormat.Raw,
+                    encryption_algorithm=serialization.NoEncryption()
+                ))
+            # For TLS cert, self-signed
+            import subprocess
+            subprocess.run([
+                "openssl", "req", "-x509", "-newkey", "ed25519", "-keyout", KEY_FILE,
+                "-out", CERT_FILE, "-days", "365", "-nodes",
+                "-subj", "/CN=LibreMeshSatellite"
+            ])
+        # Load private key and calculate SHA256 of public key for fingerprint
+        with open(KEY_FILE, "rb") as f:
+            priv_bytes = f.read()
+        priv = ed25519.Ed25519PrivateKey.from_private_bytes(priv_bytes)
+        pub = priv.public_key()
+        pub_bytes = pub.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw
+        )
+        return hashlib.sha256(pub_bytes).hexdigest()
 
     async def start(self):
-        server = await asyncio.start_server(
-            self.handle_client, '0.0.0.0', NODE_PORT, ssl=self.ssl_context
-        )
-        async with server:
-            await asyncio.gather(server.serve_forever(), self.ui_loop())
+        ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        ssl_context.load_cert_chain(CERT_FILE, KEY_FILE)
+        server = await asyncio.start_server(self.handle_client, HOST, PORT, ssl=ssl_context)
+        print(f"Satellite ID: {self.id}")
+        print(f"TLS Fingerprint: {self.fingerprint}")
+        await asyncio.gather(server.serve_forever(), self.ui_loop())
 
     async def handle_client(self, reader, writer):
-        peer_ip = writer.get_extra_info("peername")[0]
-        self.suspicious_ips[peer_ip]["connections"] += 1
-        self.suspicious_ips[peer_ip]["last_seen"] = 0
-
+        ip = writer.get_extra_info('peername')[0]
+        self.suspicious_ips.setdefault(ip, {"connections": 0, "penalty": 0, "last_seen": 0})
+        self.suspicious_ips[ip]["connections"] += 1
         try:
-            # Expect IDENT first
-            line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
-            line = line.decode().strip()
-            if not line.startswith("IDENT:"):
-                raise Exception("Expected IDENT")
-            parts = line.split(":")
-            node_id, region, pubkey_hex = parts[1], parts[2], parts[3]
-            node = Node(node_id, region, pubkey_hex)
-            self.nodes[node_id] = node
-            self.add_notification(f"Node registered: {node_id}")
-        except Exception as e:
-            self.add_notification(f"Client error during handshake from {peer_ip}: {str(e)}")
+            while True:
+                line = await asyncio.wait_for(reader.readline(), timeout=300)
+                if not line:
+                    break
+                line = line.decode().strip()
+                self.process_message(line, ip)
+        except (asyncio.TimeoutError, asyncio.IncompleteReadError):
+            self.notifications.append(f"[{time.strftime('%H:%M:%S')}] Client error while reading line: {ip}")
+        finally:
             writer.close()
             await writer.wait_closed()
-            return
+            # Do not remove node, keep it for last_seen counting
+            self.notifications.append(f"[{time.strftime('%H:%M:%S')}] Node disconnected: {ip}")
 
-        # Node connected
-        while True:
-            try:
-                line = await reader.readline()
-                if not line:
-                    raise Exception("Disconnected")
-                line = line.decode().strip()
+    def process_message(self, msg, ip):
+        now = time.time()
+        parts = msg.split(":")
+        if parts[0] == "IDENT":
+            node_id, region, _ = parts[1], parts[2], parts[3]
+            node = self.nodes.get(node_id) or Node(node_id, region)
+            node.connection = ip
+            node.last_seen = 0
+            node.last_activity_ts = now
+            self.nodes[node_id] = node
+            self.notifications.append(f"[{time.strftime('%H:%M:%S')}] Node registered: {node_id}")
+        elif parts[0] == "HEARTBEAT":
+            node_id = parts[1]
+            node = self.nodes.get(node_id)
+            if node:
                 node.last_seen = 0
-                node.online = True
-
-                if line.startswith("HEARTBEAT:"):
-                    parts = line.split(":")
-                    node.uptime = int(parts[3])
-                    self.update_node_rank(node)
-                elif line.startswith("REPAIR:"):
-                    frag = line.split(":")[2]
-                    job = RepairJob(frag, node.node_id)
-                    self.repairs.append(job)
-                    self.add_notification(f"Repair requested: {frag} by {node.node_id}")
-                # Optional: handle latency or storage metrics here
-
-            except Exception:
-                node.online = False
-                self.add_notification(f"Node disconnected: {node.node_id}")
-                break
-
-    def update_node_rank(self, node):
-        # Uptime score
-        uptime_score = min(1.0, node.uptime / TARGET_UPTIME)
-        # Online reliability score
-        elapsed = time.time() - node.first_seen
-        online_time = node.total_online_time + (0 if not node.online else HEARTBEAT_INTERVAL)
-        online_score = min(1.0, online_time / max(elapsed, 1))
-        # Optional metrics placeholders
-        response_score = 1.0
-        storage_score = 1.0
-        node.rank = int(100 * (0.5*uptime_score + 0.5*online_score))
-
-    def add_notification(self, msg):
-        timestamp = time.strftime("%H:%M:%S")
-        self.notifications.append(f"[{timestamp}] {msg}")
+                node.last_activity_ts = now
+        elif parts[0] == "REPAIR":
+            fragment = parts[2]
+            node_id = parts[1]
+            self.repair_queue.append({"fragment": fragment, "requested_by": node_id, "claimed_by": None})
+            self.notifications.append(f"[{time.strftime('%H:%M:%S')}] Repair requested: {fragment} by {node_id}")
+        # Reset last_seen for IP
+        self.suspicious_ips[ip]["last_seen"] = 0
+        self.suspicious_ips[ip]["connections"] += 0
 
     async def ui_loop(self):
         while True:
-            self.refresh_last_seen()
+            self.update_last_seen()
+            self.claim_repairs()
             self.print_ui()
-            await asyncio.sleep(1)
+            await asyncio.sleep(UI_REFRESH)
 
-    def refresh_last_seen(self):
+    def update_last_seen(self):
+        now = time.time()
         for node in self.nodes.values():
-            if node.online:
-                node.total_online_time += 1
-            node.last_seen += 1
-        for ip in self.suspicious_ips.values():
-            ip["last_seen"] += 1
+            node.last_seen = int(now - node.last_activity_ts)
+            node.online_time += 1  # increment online time each second
+        for ip_data in self.suspicious_ips.values():
+            ip_data["last_seen"] += 1
+
+    def claim_repairs(self):
+        # Claim available repairs
+        for job in list(self.repair_queue):
+            if job["claimed_by"] is None:
+                job["claimed_by"] = self.id
+                self.notifications.append(f"[{time.strftime('%H:%M:%S')}] Satellite claimed job: {job['fragment']}")
+                # Simulate instant execution for test
+                self.notifications.append(f"[{time.strftime('%H:%M:%S')}] Repair completed: {job['fragment']}")
+                self.repair_queue.remove(job)
 
     def print_ui(self):
         os.system("clear")
@@ -172,17 +153,20 @@ class Satellite:
         print("| Node ID    | Region   | Rank | Uptime   | Fragments       |")
         print("+------------+----------+------+----------+-----------------+")
         for node in self.nodes.values():
-            print(f"| {node.node_id:<10} | {node.region:<8} | {node.rank:<4} | {node.uptime:<8} | {','.join(node.fragments):<15} |")
+            print(f"| {node.node_id:<10} | {node.region:<8} | {node.rank:<4} | {node.uptime:<8} | {' '.join(node.fragments):<15} |")
         print("+-------------------------------------------------------------+\n")
 
+        # Repair Queue
         print("+-------------------------------------------+")
         print("|                Repair Queue               |")
         print("+------------+----------------+------------+")
-        for job in self.repairs:
-            claimed = job.claimed_by[:8] if job.claimed_by else ""
-            print(f"| {job.fragment:<10} | {job.requested_by:<14} | {claimed:<10} |")
+        print("| Fragment   | Requested By   | Claimed By |")
+        print("+------------+----------------+------------+")
+        for job in self.repair_queue:
+            print(f"| {job['fragment']:<10} | {job['requested_by']:<14} | {job['claimed_by'] or '':<10} |")
         print("+-------------------------------------------+\n")
 
+        # Notifications
         print("+------------------------------------------------+")
         print("|                  Notifications                |")
         print("+------------------------------------------------+")
@@ -190,17 +174,22 @@ class Satellite:
             print(f"| {note:<46} |")
         print("+------------------------------------------------+\n")
 
+        # Suspicious IPs
         print("+-----------------------------------------------+")
         print("|               Suspicious IPs Advisory        |")
         print("+------------+------------+---------+----------+")
-        for ip, info in self.suspicious_ips.items():
-            print(f"| {ip:<10} | {info['connections']:<10} | {info['penalty']:<7} | {info['last_seen']:<8} |")
+        print("| IP         | Connections| Penalty | Last Seen|")
+        print("+------------+------------+---------+----------+")
+        for ip, data in self.suspicious_ips.items():
+            print(f"| {ip:<10} | {data['connections']:<10} | {data['penalty']:<7} | {data['last_seen']:<8} |")
         print("+-----------------------------------------------+\n")
 
-        print(f"Satellite ID: {self.fingerprint[:8]}")
+        print(f"Satellite ID: {self.id}")
         print(f"TLS Fingerprint: {self.fingerprint}")
 
-# Entry point
-if __name__ == "__main__":
+def main():
     sat = Satellite()
     asyncio.run(sat.start())
+
+if __name__ == "__main__":
+    main()
