@@ -3,10 +3,10 @@
         "satellites": [
             {
                 "fingerprint": "c1:6d:00:40:d8:f8:e2:22:b5:a6:69:c5:ef:10:f7:9e:d0:67:fa:40",
-                "hostname": "0.0.0.0",
+                "hostname": "192.168.0.163",
                 "port": 8888
             }
         ]
     },
-    "signature": "VlqdpqZwsVzDzsldD3guozcjkZ/bxHaU+iELUNKY4U82tHc5kzYoXiRwBEcfoRzvkvddtsB7KMMZ2KO0UTx9lqnxQJbeFVlnzCJarnw3zGkSOPfPPUQKYfxFlymXTBINcbLxhZlQ9Ew7QVu10YClKfjESHm+FSDLMjsGDADSKSDf1avCIuuOeghqfdIn3UUH8WhEBHLtraLg+en/oixf9SnhxlV9jiEzrxEny7yrM6HZfMrSiqLkhYyJfKfrrHEbZo6Fa4fA7rhbAw3joiHmM2+RcIE/248ZqfbbNODCyHJquFuG+OeIW34UKzyK4Vbuwr8aMTVd0I6o04vXBRzFlg=="
+    "signature": "gdauix7ACiPtPVsaS1XTJQnpgqpmHYqRWOxTnzPJBqICqgD9+c23KLOaJ2xhFayPh0ucVb18lyTBF3UqforwDEisB/0GirhYYUtGsvVpTCRm0I21u5ARRh0BDC848UZY2eNXGiDyKaIVK00Zg/nYxmHMlWs3KZF7RqlyZIpZmyB7KUvbj8OTeSzA6GQjZuNKloOY9YdxSTeaVcxqMDsCk3OywOBweVIoBKnxC9ba7uBfasbTTprXbo/8c9gFHyMlfJkYcYLBZHAI61liqhwZXeNlTH+cpnHqzR90R7Arx47z5/YNO+cDX6liBRRFD3idFplaQ10MR1gdyahOBU+Kug=="
 }
