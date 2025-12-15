@@ -355,7 +355,44 @@ def add_or_update_trusted_registry(sat_id, fingerprint, hostname, port):
         LIST_UPDATED_PENDING_SAVE = True
 
 def load_trusted_satellites():
-    """Loads and verifies list.json. The 'Rogue Guard' logic."""
+        """
+    STEP 3: KEY MATERIAL AND TRUST SETUP (Registry Verification / 'Rogue Guard')
+
+    Loads the locally saved trusted satellites registry (list.json),
+    verifies its signature using the origin's public key, and updates
+    TRUSTED_SATELLITES accordingly.
+
+    Purpose in boot/runtime:
+    - Ensures that the local copy of the trusted-satellites registry
+      is authentic and has not been tampered with ('Rogue Guard').
+    - Keeps the satellite's view of trusted peers consistent and secure.
+    - Provides notifications to the UI in case verification fails.
+
+    How it works:
+    1. Checks if list.json exists at LIST_JSON_PATH.
+    2. Opens and parses the file as JSON (`signed_data`):
+       - `signed_data` contains:
+         - 'data': the satellite registry dictionary
+         - 'signature': base64-encoded signature from origin
+    3. Checks that ORIGIN_PUBKEY_PEM is loaded:
+       - If not, cannot verify; function returns early.
+    4. Loads the origin public key using `serialization.load_pem_public_key()`.
+    5. Decodes the signature from base64.
+    6. Converts `data` back to JSON bytes (sorted and indented) for signature verification.
+    7. Verifies the signature using PSS padding and SHA-256:
+       - If verification fails, raises an exception.
+    8. On successful verification:
+       - Clears current TRUSTED_SATELLITES dictionary.
+       - Populates TRUSTED_SATELLITES with all entries from `data['satellites']`.
+    9. On any exception:
+       - Puts a notification into `UI_NOTIFICATIONS` indicating verification failed.
+
+    Notes:
+    - This function is **critical for non-origin satellites** to ensure they
+      trust only authentic satellites.
+    - Fully fits into STEP 3: Key/Trust Setup in the remark section.
+    - Updates global state TRUSTED_SATELLITES and triggers UI notifications.
+    """
     global TRUSTED_SATELLITES
     if os.path.exists(LIST_JSON_PATH):
         try:
@@ -368,15 +405,48 @@ def load_trusted_satellites():
             signature = base64.b64decode(signed_data['signature'])
             json_bytes = json.dumps(data, indent=4, sort_keys=True).encode('utf-8')
             public_key.verify(signature, json_bytes, padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH), hashes.SHA256())
-            
+
+            # Verification succeeded: update TRUSTED_SATELLITES
             TRUSTED_SATELLITES.clear()
             for sat in data['satellites']:
                 TRUSTED_SATELLITES[sat['id']] = sat
         except Exception:
+            # Verification failed, notify UI
             UI_NOTIFICATIONS.put_nowait("Registry: Verification Failed.")
 
 def sign_and_save_satellite_list():
-    """Origin-only: Signs and saves the list.json locally."""
+        """
+    STEP 3: ORIGIN TRUST REGISTRY UPDATE (Sign & Save list.json)
+
+    Signs and saves the current TRUSTED_SATELLITES registry locally as list.json.
+    Only executed by the origin satellite.
+
+    Purpose in boot/runtime:
+    - Ensures that followers can verify the authenticity of the satellite list.
+    - Maintains a signed snapshot of TRUSTED_SATELLITES for GitHub distribution.
+    - Prevents tampering or rogue satellites from being trusted.
+
+    How it works:
+    1. Checks if this satellite is origin (IS_ORIGIN=True) and if the
+       origin private key (ORIGIN_PRIVKEY_PEM) is available:
+       - If not, exits early; followers do not execute this function.
+    2. Loads the origin private key from PEM using cryptography.
+    3. Converts the current TRUSTED_SATELLITES dictionary into a list
+       of satellite entries.
+    4. Serializes this list into JSON bytes (sorted and indented).
+    5. Signs the JSON bytes using PSS padding with SHA-256.
+    6. Writes to LIST_JSON_PATH:
+       - 'data': the satellite registry
+       - 'signature': base64-encoded signature
+    7. Resets LIST_UPDATED_PENDING_SAVE = False to indicate no pending changes.
+
+    Notes:
+    - Only origin satellites perform this operation.
+    - Followers obtain this signed file via GitHub and verify it using
+      `load_trusted_satellites()`.
+    - Exceptions are silently ignored (could be logged for debug).
+    - Fully fits STEP 3 in the remark section: key/trust setup and registry management.
+    """
     global LIST_UPDATED_PENDING_SAVE
     if not IS_ORIGIN or not ORIGIN_PRIVKEY_PEM: return
     try:
@@ -390,6 +460,52 @@ def sign_and_save_satellite_list():
     except Exception: pass
 
 def generate_keys_and_certs():
+    """
+    STEP 2–4: ROLE DECISION, KEY GENERATION, AND IDENTITY ESTABLISHMENT
+
+    Handles TLS certificate generation, origin key setup, and assigns
+    satellite identity. Determines if this satellite is origin or follower.
+
+    Purpose in boot sequence:
+    - STEP 2: Role Decision (FORCE_ORIGIN determines origin/follower)
+    - STEP 3: Key Material
+        - Generates or loads TLS certificate for secure communications
+        - Generates or loads origin signing keys if this is the origin
+    - STEP 4: Identity Establishment
+        - Sets SATELLITE_ID and TLS_FINGERPRINT from certificate
+        - Determines ADVERTISED_IP for network registration
+
+    How it works:
+    1. Cert Generation:
+       - If CERT_PATH does not exist:
+           - Generate a new 2048-bit RSA key
+           - Create a self-signed x509 certificate valid for 10 years
+           - Save the private key to KEY_PATH
+           - Save the certificate to CERT_PATH
+    2. Role Logic:
+       - If FORCE_ORIGIN=True:
+           - IS_ORIGIN set to True
+           - If origin private key does not exist:
+               - Generate new RSA key pair for origin signing
+               - Save public key to ORIGIN_PUBKEY_PATH
+               - Save private key to ORIGIN_PRIVKEY_PATH
+           - Else, load existing ORIGIN_PUBKEY_PEM and ORIGIN_PRIVKEY_PEM
+       - If FORCE_ORIGIN=False (follower):
+           - IS_ORIGIN set to False
+           - Load ORIGIN_PUBKEY_PEM if available for trust verification
+    3. Attribute Setup:
+       - Load certificate from CERT_PATH
+       - Extract common name (CN) as SATELLITE_ID
+       - Compute TLS_FINGERPRINT as base64-encoded SHA256 fingerprint
+       - Determine ADVERTISED_IP using get_local_ip()
+
+    Notes:
+    - Generates all cryptographic material locally if missing
+    - Sets global state: SATELLITE_ID, TLS_FINGERPRINT, IS_ORIGIN,
+      ADVERTISED_IP, ORIGIN_PUBKEY_PEM, ORIGIN_PRIVKEY_PEM
+    - This is a **core boot function** executed before UI or network tasks
+      are started.
+    """
     global SATELLITE_ID, TLS_FINGERPRINT, IS_ORIGIN, ADVERTISED_IP, ORIGIN_PUBKEY_PEM, ORIGIN_PRIVKEY_PEM
     # 1. Cert Generation
     if not os.path.exists(CERT_PATH):
