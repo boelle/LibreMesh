@@ -1,59 +1,20 @@
 """
 ===============================================================================
 PROJECT: LibreMesh Satellite (Control Plane)
-VERSION: 2025.12.15
+VERSION: 2025.12.15 (GitHub Sync Enabled)
 ===============================================================================
 
 CORE ARCHITECTURE RULES:
 ------------------------
-1. CONTROL PLANE vs DATA PLANE:
-   - This script is a "Satellite" (Control Plane). It DOES NOT store data.
-   - Satellite MUST NEVER be listed in the 'Node Status' UI table.
+1. SOURCE OF TRUTH: GitHub serves as the distribution point for the signed 
+   'list.json' and the master 'origin_pubkey.pem'.
+2. ROGUE PROTECTION: Standard satellites pull the list from GitHub periodically. 
+   Any list not signed by the Master Private Key is rejected.
+3. IDENTITY: 'SATELLITE_NAME' in config dictates the ID in the UI and Cert.
 
-2. BOOT SEQUENCE & ROLE AUTHORITY:
-   - STEP 1: INITIALIZATION: Global states are set.
-   - STEP 2: ROLE DEFINITION: The 'FORCE_ORIGIN' config setting dictates role.
-   - STEP 3: KEY RECOVERY: 
-     - If FORCE_ORIGIN is True: Generate Master keys locally.
-     - If FORCE_ORIGIN is False: Fetch 'origin_pubkey.pem' from GitHub.
-   - STEP 4: IDENTITY: 'cert.pem' defines the unique TLS fingerprint.
-   - STEP 5: UI & LISTENING: Start background tasks and TCP server.
-
-3. VISUAL TERMINAL LAYOUT EXAMPLE:
-----------------------------------
-======================================================
-                Satellite Node Status
-======================================================
-Node ID            | Rank | Last Seen (s) | Uptime (s)
-------------------------------------------------------
-No nodes connected  | N/A  | N/A           | N/A
-
-======================================================
-                     Repair Queue
-======================================================
-Job ID (Fragment)              | Status | Claimed By
-------------------------------------------------------
-Queue is empty                 | N/A    | N/A
-
-======================================================
-                     Notifications
-======================================================
-
-======================================================
-               Suspicious IPs Advisory
-======================================================
-No suspicious activity detected.
-
-======================================================
-            Satellite ID + TLS Fingerprint
-======================================================
-Satellite ID:          localhost
-Advertising IP:        192.168.0.163
-Origin Status:         ORIGIN
-TLS Fingerprint:       QPNZ8dUCgc81cZX2yBp0rVsZSKm4FSw43Ax0NL5OdH4=
-Trusted Satellites:    1 in list.json
-======================================================
-
+VISUAL TERMINAL LAYOUT EXAMPLE:
+-------------------------------
+[See header in previous versions for ASCII layout]
 ===============================================================================
 """
 
@@ -81,10 +42,17 @@ LISTEN_HOST = '0.0.0.0'
 LISTEN_PORT = 8888
 ADVERTISED_IP_CONFIG = '192.168.0.163' 
 
-# ROLE CONFIGURATION
-FORCE_ORIGIN = True # True = Master/Origin, False = Standard Satellite
-ORIGIN_PUBKEY_URL = "raw.githubusercontent.com"
+# IDENTITY & ROLE
+SATELLITE_NAME = "LibreMesh-Sat-01" # Human-readable name for this node
+FORCE_ORIGIN = True                 # True = Master, False = Standard Satellite
 
+# GITHUB SYNC
+GITHUB_BASE_URL = "raw.githubusercontent.com"
+ORIGIN_PUBKEY_URL = GITHUB_BASE_URL + "origin_pubkey.pem"
+LIST_JSON_URL = GITHUB_BASE_URL + "list.json"
+SYNC_INTERVAL = 300 # Seconds between GitHub pulls (5 mins)
+
+# Global State
 NODES = {} 
 REPAIR_QUEUE = asyncio.Queue()
 SATELLITE_ID = None
@@ -102,22 +70,37 @@ TRUSTED_SATELLITES = {}
 ADVERTISED_IP = None
 LIST_UPDATED_PENDING_SAVE = False
 
-# --- Helper Functions ---
+# --- Core Logic ---
 def get_local_ip():
     return ADVERTISED_IP_CONFIG if ADVERTISED_IP_CONFIG else socket.gethostbyname(socket.gethostname())
 
-async def fetch_origin_pubkey():
-    """Attempts to download the master public key from GitHub if missing."""
-    if not os.path.exists(ORIGIN_PUBKEY_PATH):
-        try:
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(None, lambda: urllib.request.urlopen(ORIGIN_PUBKEY_URL).read())
-            with open(ORIGIN_PUBKEY_PATH, "wb") as f:
-                f.write(response)
-            return True
-        except Exception:
-            return False
-    return True
+async def fetch_github_file(url, local_path):
+    """Generic helper to pull files from GitHub."""
+    try:
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, lambda: urllib.request.urlopen(url).read())
+        with open(local_path, "wb") as f:
+            f.write(response)
+        return True
+    except Exception:
+        return False
+
+async def sync_with_github():
+    """Periodic task to keep standard satellites updated and guarded."""
+    while True:
+        if not IS_ORIGIN:
+            # Pull key and list
+            await fetch_github_file(ORIGIN_PUBKEY_URL, ORIGIN_PUBKEY_PATH)
+            await fetch_github_file(LIST_JSON_URL, LIST_JSON_PATH)
+            
+            # Reload and re-verify
+            global ORIGIN_PUBKEY_PEM
+            if os.path.exists(ORIGIN_PUBKEY_PATH):
+                with open(ORIGIN_PUBKEY_PATH, "rb") as f:
+                    ORIGIN_PUBKEY_PEM = f.read()
+            load_trusted_satellites()
+            
+        await asyncio.sleep(SYNC_INTERVAL)
 
 def add_or_update_trusted_registry(sat_id, fingerprint, hostname, port):
     global LIST_UPDATED_PENDING_SAVE
@@ -125,7 +108,7 @@ def add_or_update_trusted_registry(sat_id, fingerprint, hostname, port):
     new_details = {"id": sat_id, "fingerprint": fingerprint, "hostname": hostname, "port": port}
     if sat_id not in TRUSTED_SATELLITES or TRUSTED_SATELLITES[sat_id] != new_details:
         TRUSTED_SATELLITES[sat_id] = new_details
-        UI_NOTIFICATIONS.put_nowait(f"Registry Updated: {sat_id}")
+        UI_NOTIFICATIONS.put_nowait(f"Registry: {sat_id} added.")
         LIST_UPDATED_PENDING_SAVE = True
 
 def load_trusted_satellites():
@@ -136,14 +119,18 @@ def load_trusted_satellites():
                 signed_data = json.load(f)
             data = signed_data['data']
             if not ORIGIN_PUBKEY_PEM: return
+            
+            # Signature Verification (The Rogue Guard)
             public_key = serialization.load_pem_public_key(ORIGIN_PUBKEY_PEM, backend=default_backend())
             signature = base64.b64decode(signed_data['signature'])
-            json_data_bytes = json.dumps(data, indent=4, sort_keys=True).encode('utf-8')
-            public_key.verify(signature, json_data_bytes, padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH), hashes.SHA256())
+            json_bytes = json.dumps(data, indent=4, sort_keys=True).encode('utf-8')
+            public_key.verify(signature, json_bytes, padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH), hashes.SHA256())
+            
+            TRUSTED_SATELLITES.clear() # Wipe old trust before loading verified new trust
             for sat in data['satellites']:
                 TRUSTED_SATELLITES[sat['id']] = sat
-        except Exception as e:
-            UI_NOTIFICATIONS.put_nowait(f"Registry Verification Error: {e}")
+        except Exception:
+            UI_NOTIFICATIONS.put_nowait("Registry Warning: Verification failed.")
 
 def sign_and_save_satellite_list():
     global LIST_UPDATED_PENDING_SAVE
@@ -156,16 +143,15 @@ def sign_and_save_satellite_list():
         with open(LIST_JSON_PATH, 'w') as f:
             json.dump({"data": data, "signature": base64.b64encode(sig).decode('utf-8')}, f, indent=4)
         LIST_UPDATED_PENDING_SAVE = False
-    except Exception:
-        pass
+    except Exception: pass
 
 def generate_keys_and_certs():
     global SATELLITE_ID, TLS_FINGERPRINT, IS_ORIGIN, ADVERTISED_IP, ORIGIN_PUBKEY_PEM, ORIGIN_PRIVKEY_PEM
-    # 1. Identity
+    # 1. Identity Cert (Using SATELLITE_NAME from config)
     if not os.path.exists(CERT_PATH):
         key = rsa.generate_private_key(65537, 2048)
-        subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, u"localhost")])
-        cert = x509.CertificateBuilder().subject_name(subject).issuer_name(issuer).public_key(key.public_key()).serial_number(x509.random_serial_number()).not_valid_before(datetime.utcnow()).not_valid_after(datetime.utcnow() + timedelta(days=3650)).sign(key, hashes.SHA256())
+        subj = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, str(SATELLITE_NAME))])
+        cert = x509.CertificateBuilder().subject_name(subj).issuer_name(subj).public_key(key.public_key()).serial_number(x509.random_serial_number()).not_valid_before(datetime.utcnow()).not_valid_after(datetime.utcnow() + timedelta(days=3650)).sign(key, hashes.SHA256())
         with open(KEY_PATH, "wb") as f: f.write(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
         with open(CERT_PATH, "wb") as f: f.write(cert.public_bytes(serialization.Encoding.PEM))
 
@@ -186,14 +172,15 @@ def generate_keys_and_certs():
         if os.path.exists(ORIGIN_PUBKEY_PATH):
             with open(ORIGIN_PUBKEY_PATH, "rb") as f: ORIGIN_PUBKEY_PEM = f.read()
 
+    # 3. Attribute Extraction
     with open(CERT_PATH, 'rb') as f:
         cert = x509.load_pem_x509_certificate(f.read(), default_backend())
     cn_attrs = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
-    SATELLITE_ID = cn_attrs[0].value if cn_attrs else "localhost"
+    SATELLITE_ID = cn_attrs[0].value if cn_attrs else str(SATELLITE_NAME)
     TLS_FINGERPRINT = base64.b64encode(cert.fingerprint(hashes.SHA256())).decode('utf-8')
     ADVERTISED_IP = get_local_ip()
 
-# --- UI & Tasks (Omitted for brevity, remains unchanged) ---
+# --- UI Loop ---
 async def draw_ui():
     while True:
         os.system('clear' if os.name == 'posix' else 'cls')
@@ -230,14 +217,18 @@ async def save_list_periodically():
 async def main():
     global ORIGIN_PUBKEY_PEM
     if not FORCE_ORIGIN:
-        await fetch_origin_pubkey()
+        await fetch_github_file(ORIGIN_PUBKEY_URL, ORIGIN_PUBKEY_PATH)
 
     generate_keys_and_certs()
     load_trusted_satellites()
+    
+    # Register self in registry (NOT in Node Status table)
     add_or_update_trusted_registry(SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP, LISTEN_PORT)
     
     asyncio.create_task(draw_ui())
     asyncio.create_task(save_list_periodically())
+    asyncio.create_task(sync_with_github()) # Start periodic sync
+    
     server = await asyncio.start_server(lambda r, w: None, LISTEN_HOST, LISTEN_PORT)
     async with server: await server.serve_forever()
 
