@@ -223,9 +223,8 @@ SATELLITE_NAME = "LibreMesh-Sat-01"
 FORCE_ORIGIN = True # Set to True for the Master/Origin node
 
 # GITHUB SYNC
-GITHUB_BASE_URL = "raw.githubusercontent.com"
-ORIGIN_PUBKEY_URL = GITHUB_BASE_URL + "origin_pubkey.pem"
-LIST_JSON_URL = GITHUB_BASE_URL + "list.json"
+ORIGIN_PUBKEY_URL = "https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/origin_pubkey.pem"
+LIST_JSON_URL    = "https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/trusted-satellites/list.json"
 SYNC_INTERVAL = 300 # Pull list.json every 5 minutes
 
 # Global State
