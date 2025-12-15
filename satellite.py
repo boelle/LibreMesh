@@ -618,6 +618,11 @@ async def handle_node_sync(reader, writer):
 
         # Only origin accepts registrations
         if IS_ORIGIN:
+            # Validate required payload keys
+            required_keys = {"id", "fingerprint", "ip", "port"}
+            if not required_keys.issubset(payload.keys()):
+                raise ValueError(f"Invalid node sync payload keys={list(payload.keys())}")
+
             existing = TRUSTED_SATELLITES.get(sat_id)
 
             new_entry = {
