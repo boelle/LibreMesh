@@ -820,6 +820,9 @@ async def main():
     # Origin auto-adds itself to registry for distribution
     add_or_update_trusted_registry(SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP, LISTEN_PORT)
 
+    if IS_ORIGIN:
+        sign_and_save_satellite_list()
+    
     # Follower reports itself to origin
     if not IS_ORIGIN:
         try:
