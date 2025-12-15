@@ -210,7 +210,7 @@ LIST_UPDATED_PENDING_SAVE = False
 
 # --- Core Logic ---
 def get_local_ip():
-        """
+    """
     STEP 4: IDENTITY ESTABLISHMENT (used to configure ADVERTISED_IP)
 
     Returns the local IP address of the satellite for network advertisement.
@@ -281,7 +281,7 @@ async def fetch_github_file(url, local_path, force=False):
     return True
 
 async def sync_registry_from_github():
-        """
+    """
     STEP 5: BACKGROUND TASK / MAINTENANCE LOOP
 
     Periodically fetches the signed trusted-satellites list (list.json) from GitHub
@@ -316,7 +316,7 @@ async def sync_registry_from_github():
         await asyncio.sleep(SYNC_INTERVAL)
 
 def add_or_update_trusted_registry(sat_id, fingerprint, hostname, port):
-        """
+    """
     STEP 3–5: ORIGIN TRUST REGISTRY UPDATE
 
     Adds or updates a satellite in the TRUSTED_SATELLITES registry.
@@ -355,7 +355,7 @@ def add_or_update_trusted_registry(sat_id, fingerprint, hostname, port):
         LIST_UPDATED_PENDING_SAVE = True
 
 def load_trusted_satellites():
-        """
+    """
     STEP 3: KEY MATERIAL AND TRUST SETUP (Registry Verification / 'Rogue Guard')
 
     Loads the locally saved trusted satellites registry (list.json),
@@ -415,7 +415,7 @@ def load_trusted_satellites():
             UI_NOTIFICATIONS.put_nowait("Registry: Verification Failed.")
 
 def sign_and_save_satellite_list():
-        """
+    """
     STEP 3: ORIGIN TRUST REGISTRY UPDATE (Sign & Save list.json)
 
     Signs and saves the current TRUSTED_SATELLITES registry locally as list.json.
@@ -542,7 +542,7 @@ def generate_keys_and_certs():
 
 # --- UI Loop ---
 async def draw_ui():
-        """
+    """
     STEP 5: TERMINAL UI (User Interface / Status Display)
 
     Continuously displays the satellite's internal state in the terminal.
@@ -602,7 +602,7 @@ async def draw_ui():
         await asyncio.sleep(2)
 
 async def main():
-        """
+    """
     STEP 1–5: BOOT SEQUENCE ORCHESTRATION
 
     Entry point for the satellite node. Performs initialization,
