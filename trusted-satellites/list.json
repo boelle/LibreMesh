@@ -2,18 +2,12 @@
     "data": {
         "satellites": [
             {
-                "id": "localhost",
-                "fingerprint": "QPNZ8dUCgc81cZX2yBp0rVsZSKm4FSw43Ax0NL5OdH4=",
+                "id": "LibreMesh-Sat-01",
+                "fingerprint": "WYrQa+C2jcnzy/59/m8oxSDWtmbjLbPto96tbsCbwXA=",
                 "hostname": "192.168.0.163",
                 "port": 8888
-            },
-            {
-                "id": "LibreMesh-Sat-02",
-                "fingerprint": "coyWznurYTWGazT2VF6wVeOIhCEX7k8Y/salc7aS7OU=",
-                "hostname": "192.168.0.164",
-                "port": 8889
             }
         ]
     },
-    "signature": "vG5BMyA1Cp8XwQj03Wsi7HCgWQCbGmmvPBOxhdTs5I13pxr7Gq+/G3TUBePGDcCo8dgg9k15ZsVpZeAN7pQXnvhAbGUbbktYX7ANNZ7i7ML54HMEG9Pffp9Itsbbz0aI/huEfEUhEaORCHvNULf5H72hstSlze77K/GHGVpIJulEDjgq2bjQgrz1Qtz27TInOBIAostUY8pFo8bmhuzCVM8bmXoav9R44Ck6xhOQr79LqFPvPFtFpmaSbC2+aexmuRdRB3pZNWFicWwwVV3T5Pl5/pJ4+FTMOOjHsVL/ICyum0mXdrAoJiqr+Dk7fFfBPuFGyFOjzSVVxf1zwnhBqA=="
+    "signature": "fzPZDoZMAdU093umhfpMPsl3HOovihWpi8YHXSUCkdvEk+FlLckyAnJ0Q4OJ8ceVeBiehMJgWe1qvlsNgdzGarXxPKOzcl0rHK7AncKk5eDuxstJA+5sZSRovAPGFNLKWd3vCAjf8+XbaXl+ppfJoKBuu0hJegM2FjoQQd9aeVQZ5Ur0nbt57PtPcckpG7YkVX7KcdUlLCX7zfc1XWuBQB/6685/jm3XCB4sB1+ZdG/PlmOjusNhqBCLqv6+P0mIjr89/DoUY3jBRvsvFXcJ6QFaSXsKe1uq4FFMnLQGCTnvX3BovOtKoljTZ+xvenD1tGEzXz4e0jYzO76tDJDqVw=="
 }
