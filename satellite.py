@@ -174,11 +174,13 @@ from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend
 from datetime import datetime, timedelta
+from collections import deque
 
 # --- Configuration ---
 LISTEN_HOST = '0.0.0.0'
 LISTEN_PORT = 8888
 ORIGIN_PORT = 8888
+ORIGIN_HOST = '102.168.0.163'
 ADVERTISED_IP_CONFIG = '192.168.0.163' 
 
 # IDENTITY & ROLE
@@ -194,6 +196,7 @@ LIST_JSON_URL    = "https://raw.githubusercontent.com/boelle/LibreMesh/refs/head
 SYNC_INTERVAL = 300 # Pull list.json every 5 minutes
 
 # Global State
+NOTIFICATION_LOG = deque(maxlen=10)
 NODES = {}               # Tracks remote storage nodes
 REMOTE_SATELLITES = {}   # Tracks other online satellites
 REPAIR_QUEUE = asyncio.Queue()
@@ -723,10 +726,15 @@ async def draw_ui():
         print("Queue is empty                 | N/A    | N/A")
         print("\n" + "="*54 + "\n                     Notifications\n" + "="*54)
         temp_msgs = []
-        while not UI_NOTIFICATIONS.empty(): temp_msgs.append(UI_NOTIFICATIONS.get_nowait())
-        if not temp_msgs: print("\n\n")
+        while not UI_NOTIFICATIONS.empty():
+            NOTIFICATION_LOG.append(UI_NOTIFICATIONS.get_nowait())
+
+        if not NOTIFICATION_LOG:
+            print("\n\n")
         else:
-            for m in temp_msgs[-4:]: print(m)
+            for m in NOTIFICATION_LOG:
+                print(m)
+                
         print("\n" + "="*54 + "\n               Suspicious IPs Advisory\n" + "="*54)
         print("No suspicious activity detected.")
         print("\n" + "="*54 + "\n            Satellite ID + TLS Fingerprint\n" + "="*54)
