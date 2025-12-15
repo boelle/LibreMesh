@@ -178,6 +178,7 @@ from datetime import datetime, timedelta
 # --- Configuration ---
 LISTEN_HOST = '0.0.0.0'
 LISTEN_PORT = 8888
+ORIGIN_PORT = 8888
 ADVERTISED_IP_CONFIG = '192.168.0.163' 
 
 # IDENTITY & ROLE
@@ -607,7 +608,7 @@ async def handle_node_sync(reader, writer):
             TRUSTED_SATELLITES[sat_id] = {
                 "id": sat_id,
                 "fingerprint": fingerprint,
-                "ip": ip,
+                "hostname": ip,
                 "port": port,
             }
 
@@ -647,6 +648,32 @@ async def announce_to_origin():
 
     except Exception:
         UI_NOTIFICATIONS.put_nowait("Failed to reach origin")
+
+async def register_with_origin():
+    if IS_ORIGIN:
+        return
+
+    try:
+        reader, writer = await asyncio.open_connection(ORIGIN_HOST, ORIGIN_PORT)
+
+        payload = {
+            "id": SATELLITE_ID,
+            "fingerprint": TLS_FINGERPRINT,
+            "ip": ADVERTISED_IP,
+            "port": LISTEN_PORT,
+        }
+
+        writer.write(json.dumps(payload).encode())
+        await writer.drain()
+
+        writer.close()
+        await writer.wait_closed()
+
+        UI_NOTIFICATIONS.put_nowait("Registered with origin")
+
+    except Exception as e:
+        UI_NOTIFICATIONS.put_nowait(f"Origin registration failed: {e}")
+
 
 
 # --- UI Loop ---
@@ -761,6 +788,8 @@ async def main():
 
     generate_keys_and_certs()
     load_trusted_satellites()
+    
+    await register_with_origin()
     
     # Origin auto-adds itself to registry for distribution
     add_or_update_trusted_registry(SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP, LISTEN_PORT)
