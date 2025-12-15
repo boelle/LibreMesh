@@ -14,27 +14,19 @@ CORE ARCHITECTURE RULES FOR AI & DEVELOPERS:
    - RULE: The Satellite must NEVER be listed in the 'Satellite Node Status' 
      UI table. That table is reserved for storage-providing nodes only.
 
-2. TRUST MODEL (Origin vs Satellite):
-   - ORIGIN: The master satellite that possesses the 'origin_privkey.pem'. 
-     Only the Origin can sign and update 'list.json'.
-   - SATELLITE: A secondary control node that possesses 'origin_pubkey.pem' 
-     to verify the list but cannot modify it.
+2. BOOT SEQUENCE & ROLE DETERMINATION:
+   - STEP 1: Initialization of global states (NODES, TRUSTED_SATELLITES).
+   - STEP 2: Identity Check. 'cert.pem' defines the TLS identity.
+   - STEP 3: Role Determination. 
+     - If 'origin_privkey.pem' exists -> Role: ORIGIN (Master).
+     - If ONLY 'origin_pubkey.pem' exists -> Role: SATELLITE (Member).
+   - DISTRIBUTION: 'origin_pubkey.pem' can be securely fetched from a 
+     trusted GitHub repository (2FA protected) to automate satellite setup.
 
 3. PERSISTENCE LOGIC (list.json):
-   - The 'list.json' file is a signed registry of trusted satellites.
-   - BUG PREVENTION: Do not overwrite 'list.json' on every startup. 
-     Only write to disk if 'LIST_UPDATED_PENDING_SAVE' is True (triggered 
-     by a new satellite registration or ID change).
-
-4. UI COMPONENTS (ASCII Terminal UI):
-   - Node Status: Active storage nodes only.
-   - Repair Queue: Coordination of fragment reconstruction jobs.
-   - Notifications: Real-time event log (Queue-based).
-   - Identity: Displays Satellite ID, IP, Role, and TLS Fingerprint.
-
-5. SECURITY:
-   - Communication is enforced via TLS with mutual certificate verification.
-   - Identity is tied to the TLS Fingerprint of 'cert.pem'.
+   - 'list.json' is a signed registry.
+   - It is ONLY saved to disk if 'LIST_UPDATED_PENDING_SAVE' is True.
+   - Verification MUST happen via 'origin_pubkey.pem' before any list is trusted.
 
 ===============================================================================
 """
@@ -61,8 +53,9 @@ from datetime import datetime, timedelta
 LISTEN_HOST = '0.0.0.0'
 LISTEN_PORT = 8888
 ADVERTISED_IP_CONFIG = '192.168.0.163' 
+FORCE_ORIGIN = True # Toggle to allow/prevent master key generation
 
-NODES = {} # Tracks remote STORAGE NODES only (Data Plane)
+NODES = {} 
 REPAIR_QUEUE = asyncio.Queue()
 SATELLITE_ID = None
 TLS_FINGERPRINT = None
@@ -75,16 +68,15 @@ ORIGIN_PRIVKEY_PATH = 'origin_privkey.pem'
 CERT_PATH = 'cert.pem'
 KEY_PATH = 'key.pem'
 UI_NOTIFICATIONS = asyncio.Queue(maxsize=20)
-TRUSTED_SATELLITES = {} # Registry of authorized Control Plane nodes
+TRUSTED_SATELLITES = {} 
 ADVERTISED_IP = None
 LIST_UPDATED_PENDING_SAVE = False
 
-# --- Core Helper Functions ---
+# --- Helper Functions ---
 def get_local_ip():
     return ADVERTISED_IP_CONFIG if ADVERTISED_IP_CONFIG else socket.gethostbyname(socket.gethostname())
 
 def add_or_update_trusted_registry(sat_id, fingerprint, hostname, port):
-    """Updates the list of trusted satellites (Control Plane only)."""
     global LIST_UPDATED_PENDING_SAVE
     if not IS_ORIGIN: return
     new_details = {"id": sat_id, "fingerprint": fingerprint, "hostname": hostname, "port": port}
@@ -94,7 +86,6 @@ def add_or_update_trusted_registry(sat_id, fingerprint, hostname, port):
         LIST_UPDATED_PENDING_SAVE = True
 
 def load_trusted_satellites():
-    """Loads and verifies the signed list.json on boot."""
     global TRUSTED_SATELLITES
     if os.path.exists(LIST_JSON_PATH):
         try:
@@ -108,10 +99,9 @@ def load_trusted_satellites():
             for sat in data['satellites']:
                 TRUSTED_SATELLITES[sat['id']] = sat
         except Exception as e:
-            UI_NOTIFICATIONS.put_nowait(f"Startup: {e}")
+            UI_NOTIFICATIONS.put_nowait(f"Registry Error: {e}")
 
 def sign_and_save_satellite_list():
-    """Signs the registry with the Origin's private key and saves to disk."""
     global LIST_UPDATED_PENDING_SAVE
     if not IS_ORIGIN or not ORIGIN_PRIVKEY_PEM: return
     try:
@@ -126,7 +116,6 @@ def sign_and_save_satellite_list():
         UI_NOTIFICATIONS.put_nowait(f"Disk Write Error: {e}")
 
 def generate_keys_and_certs():
-    """Handles RSA key and X.509 certificate generation/loading."""
     global SATELLITE_ID, TLS_FINGERPRINT, IS_ORIGIN, ADVERTISED_IP, ORIGIN_PUBKEY_PEM, ORIGIN_PRIVKEY_PEM
     if not os.path.exists(CERT_PATH):
         key = rsa.generate_private_key(65537, 2048)
@@ -136,12 +125,13 @@ def generate_keys_and_certs():
         with open(CERT_PATH, "wb") as f: f.write(cert.public_bytes(serialization.Encoding.PEM))
 
     if not os.path.exists(ORIGIN_PUBKEY_PATH):
-        IS_ORIGIN = True
-        priv = rsa.generate_private_key(65537, 2048)
-        ORIGIN_PUBKEY_PEM = priv.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
-        ORIGIN_PRIVKEY_PEM = priv.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption())
-        with open(ORIGIN_PUBKEY_PATH, "wb") as f: f.write(ORIGIN_PUBKEY_PEM)
-        with open(ORIGIN_PRIVKEY_PATH, "wb") as f: f.write(ORIGIN_PRIVKEY_PEM)
+        if FORCE_ORIGIN:
+            IS_ORIGIN = True
+            priv = rsa.generate_private_key(65537, 2048)
+            ORIGIN_PUBKEY_PEM = priv.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+            ORIGIN_PRIVKEY_PEM = priv.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption())
+            with open(ORIGIN_PUBKEY_PATH, "wb") as f: f.write(ORIGIN_PUBKEY_PEM)
+            with open(ORIGIN_PRIVKEY_PATH, "wb") as f: f.write(ORIGIN_PRIVKEY_PEM)
     else:
         with open(ORIGIN_PUBKEY_PATH, "rb") as f: ORIGIN_PUBKEY_PEM = f.read()
         if os.path.exists(ORIGIN_PRIVKEY_PATH):
@@ -152,85 +142,56 @@ def generate_keys_and_certs():
         cert = x509.load_pem_x509_certificate(f.read())
     
     cn_attrs = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
-    # FIX: Correctly access the .value attribute from the OID list
+    # FIX: Access first list item correctly
     SATELLITE_ID = cn_attrs[0].value if cn_attrs else "localhost"
     TLS_FINGERPRINT = base64.b64encode(cert.fingerprint(hashes.SHA256())).decode('utf-8')
     ADVERTISED_IP = get_local_ip()
 
-# --- ASCII UI Loop ---
+# --- UI Loop ---
 async def draw_ui():
-    """Main terminal interface for monitoring Satellite state."""
     while True:
         os.system('clear' if os.name == 'posix' else 'cls')
-        print("="*54)
-        print("                Satellite Node Status")
-        print("="*54)
+        print("="*54 + "\n                Satellite Node Status\n" + "="*54)
         print(f"{'Node ID':<18} | {'Rank':<4} | {'Last Seen (s)':<13} | {'Uptime (s)':<10}")
         print("-" * 54)
-        if not NODES: 
-            print("No nodes connected  | N/A  | N/A           | N/A")
+        if not NODES: print("No nodes connected  | N/A  | N/A           | N/A")
         else:
-            for k, v in NODES.items():
-                # Display remote storage nodes only
-                print(f"{k[:15]:<18} | Node | {int(time.time()-v):<13} | N/A")
+            for k, v in NODES.items(): print(f"{k[:15]:<18} | Node | {int(time.time()-v):<13} | N/A")
         
-        print("\n" + "="*54)
-        print("                     Repair Queue")
-        print("="*54)
-        print(f"{'Job ID (Fragment)':<30} | {'Status':<6} | {'Claimed By':<10}")
-        print("-" * 54)
+        print("\n" + "="*54 + "\n                     Repair Queue\n" + "="*54)
+        print(f"{'Job ID (Fragment)':<30} | {'Status':<6} | {'Claimed By':<10}\n" + "-" * 54)
         print("Queue is empty                 | N/A    | N/A")
 
-        print("\n" + "="*54)
-        print("                     Notifications")
-        print("="*54)
+        print("\n" + "="*54 + "\n                     Notifications\n" + "="*54)
         temp_msgs = []
         while not UI_NOTIFICATIONS.empty(): temp_msgs.append(UI_NOTIFICATIONS.get_nowait())
-        if not temp_msgs: 
-            print("\n\n")
+        if not temp_msgs: print("\n\n")
         else:
             for m in temp_msgs[-4:]: print(m)
 
-        print("\n" + "="*54)
-        print("               Suspicious IPs Advisory")
-        print("="*54)
-        print("No suspicious activity detected.")
-
-        print("\n" + "="*54)
-        print("            Satellite ID + TLS Fingerprint")
-        print("="*54)
+        print("\n" + "="*54 + "\n            Satellite ID + TLS Fingerprint\n" + "="*54)
         print(f"Satellite ID:          {SATELLITE_ID}")
         print(f"Advertising IP:        {ADVERTISED_IP}")
         print(f"Origin Status:         {'ORIGIN' if IS_ORIGIN else 'SATELLITE'}")
         print(f"TLS Fingerprint:       {TLS_FINGERPRINT}")
-        print(f"Trusted Satellites:    {len(TRUSTED_SATELLITES)} in list.json")
-        print("="*54)
+        print(f"Trusted Satellites:    {len(TRUSTED_SATELLITES)} in list.json\n" + "="*54)
         await asyncio.sleep(2)
 
 async def save_list_periodically():
-    """Background task to commit registry changes to disk."""
     while True:
         await asyncio.sleep(10)
         if LIST_UPDATED_PENDING_SAVE:
             sign_and_save_satellite_list()
 
 async def main():
-    """Application entry point."""
     generate_keys_and_certs()
     load_trusted_satellites()
-    
-    # 1. Register self in TRUSTED REGISTRY (so we appear in list.json count)
-    # 2. But NOT in NODES list (so we don't appear in the Node Status table)
     add_or_update_trusted_registry(SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP, LISTEN_PORT)
-    
     asyncio.create_task(draw_ui())
     asyncio.create_task(save_list_periodically())
-    
     server = await asyncio.start_server(lambda r, w: None, LISTEN_HOST, LISTEN_PORT)
     async with server: await server.serve_forever()
 
 if __name__ == "__main__":
-    try: 
-        asyncio.run(main())
-    except KeyboardInterrupt: 
-        pass
+    try: asyncio.run(main())
+    except KeyboardInterrupt: pass
