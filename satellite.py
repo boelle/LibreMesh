@@ -184,6 +184,9 @@ ADVERTISED_IP_CONFIG = '192.168.0.163'
 SATELLITE_NAME = "LibreMesh-Sat-01" 
 FORCE_ORIGIN = True # Set to True for the Master/Origin node
 
+# --- Node Sync ---
+NODE_SYNC_INTERVAL = 5  # seconds between node sync rounds
+
 # GITHUB SYNC
 ORIGIN_PUBKEY_URL = "https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/origin_pubkey.pem"
 LIST_JSON_URL    = "https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/trusted-satellites/list.json"
@@ -279,6 +282,46 @@ async def fetch_github_file(url, local_path, force=False):
             return False
     # File already exists and force not requested
     return True
+
+async def sync_nodes_with_peers():
+    """
+    Hybrid NODES synchronization (Step 5 supplement):
+    - Periodically sends your NODES dict to all trusted satellites.
+    - Receives their NODES dict and merges into local NODES.
+    - Ensures each satellite has a more complete view of the network.
+    - Origin remains authoritative for trust; this only syncs topology info.
+    """
+    while True:
+        for sat_id, sat_info in TRUSTED_SATELLITES.items():
+            if sat_id == SATELLITE_ID:
+                continue  # skip self
+
+            peer_host = sat_info['hostname']
+            peer_port = sat_info['port']
+
+            try:
+                # Simple TCP request to send local NODES
+                reader, writer = await asyncio.open_connection(peer_host, peer_port)
+                # Send serialized NODES
+                writer.write(json.dumps(NODES).encode('utf-8'))
+                await writer.drain()
+
+                # Receive peer's NODES
+                data = await reader.read(65536)
+                peer_nodes = json.loads(data.decode('utf-8'))
+
+                # Merge peer NODES into local NODES
+                for node_id, last_seen in peer_nodes.items():
+                    if node_id not in NODES or last_seen > NODES[node_id]:
+                        NODES[node_id] = last_seen
+
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                # Ignore unreachable peers
+                continue
+
+        await asyncio.sleep(NODE_SYNC_INTERVAL)
 
 async def sync_registry_from_github():
     """
@@ -540,6 +583,28 @@ def generate_keys_and_certs():
     TLS_FINGERPRINT = base64.b64encode(cert.fingerprint(hashes.SHA256())).decode('utf-8')
     ADVERTISED_IP = get_local_ip()
 
+async def handle_node_sync(reader, writer):
+    """
+    Receives a JSON-encoded NODES dict from a peer, merges it, and
+    returns our own NODES dict.
+    """
+    try:
+        data = await reader.read(65536)
+        peer_nodes = json.loads(data.decode('utf-8'))
+
+        for node_id, last_seen in peer_nodes.items():
+            if node_id not in NODES or last_seen > NODES[node_id]:
+                NODES[node_id] = last_seen
+
+        # Send back our current NODES for merge
+        writer.write(json.dumps(NODES).encode('utf-8'))
+        await writer.drain()
+    except Exception:
+        pass
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
 # --- UI Loop ---
 async def draw_ui():
     """
@@ -660,8 +725,10 @@ async def main():
     asyncio.create_task(draw_ui())
     asyncio.create_task(sync_registry_from_github())
 
+    asyncio.create_task(sync_nodes_with_peers())
+
     # Start TCP server (placeholder) to accept connections
-    server = await asyncio.start_server(lambda r, w: None, LISTEN_HOST, LISTEN_PORT)
+    server = await asyncio.start_server(handle_node_sync, LISTEN_HOST, LISTEN_PORT)
     async with server: await server.serve_forever()
 
 if __name__ == "__main__":
