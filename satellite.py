@@ -4,6 +4,135 @@ PROJECT: LibreMesh Satellite (Control Plane)
 VERSION: 2025.12.15 (GitHub Truth & Security Polished)
 ===============================================================================
 
+1. INITIALIZATION (MEMORY SETUP):
+---------------------------------
+
+The program creates all global state:
+
+ - Known nodes
+
+ - Trusted satellites
+
+ - Repair queues
+
+ - Runtime flags and configuration
+
+At this point:
+
+ - No network activity exists
+
+ - No identity has been established
+
+ - No UI is running
+
+This step only prepares internal memory.
+
+2. ROLE DECISION (ORIGIN OR SATELLITE)
+----------------------------------------
+
+The FORCE_ORIGIN setting determines the role:
+
+ - If True, this instance acts as the origin authority
+
+ - If False, this instance acts as a regular satellite
+
+This role affects:
+
+ - Which keys are generated
+
+ - Which keys are trusted
+
+ - Whether this instance publishes authority data
+
+3. KEY MATERIAL AND TRUST SETUP
+-------------------------------
+
+The program ensures cryptographic material exists:
+
+If this instance is the origin:
+
+ - Generate origin signing keys if missing
+
+ - Trust itself as the root authority
+
+If this instance is not the origin:
+
+ - Fetch the origin’s public key once
+
+ - Store it locally for future trust verification
+
+This step establishes who is allowed to define truth in the network.
+
+4. IDENTITY ESTABLISHMENT
+-------------------------
+
+A TLS certificate is created or loaded
+
+The certificate’s fingerprint becomes:
+
+ - The unique identity of this satellite
+
+This identity is stable across restarts
+
+5. UI STARTUP (OPERATOR VISIBILITY)
+--------------------------------
+
+A continuous terminal UI loop is started
+
+The UI shows:
+
+ - Local satellite identity
+
+ - Known satellites and nodes
+
+ - Repair queue state
+
+ - Notifications and system status
+
+This UI is authoritative:
+
+ - It reflects internal state directly
+
+ - It is not cosmetic or optional
+
+6. BACKGROUND MAINTENANCE TASKS
+-------------------------------
+
+A synchronization loop starts:
+
+ - Periodically fetches signed satellite lists
+
+ - Verifies signatures against trusted keys
+
+ - Updates trusted satellite state
+
+These tasks run continuously in parallel with the UI
+
+7. NETWORK LISTENING
+--------------------
+
+A TCP server is started
+
+The server accepts inbound connections
+
+Message handling is intentionally minimal or stubbed
+
+The listener exists to anchor the satellite in the network
+
+8. STEADY STATE
+---------------
+
+The process runs indefinitely
+
+UI refreshes continuously
+
+Background tasks execute on schedule
+
+Network connections may be accepted
+
+Shutdown is manual
+
+
 CORE ARCHITECTURE RULES:
 ------------------------
 1. CONTROL PLANE vs DATA PLANE:
@@ -59,6 +188,8 @@ Origin Status:         ORIGIN
 TLS Fingerprint:       QPNZ8dUCgc81cZX2yBp0rVsZSKm4FSw43Ax0NL5OdH4=
 Trusted Satellites:    1 in list.json
 ======================================================
+
+
 
 ===============================================================================
 """
