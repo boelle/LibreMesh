@@ -588,31 +588,66 @@ async def handle_node_sync(reader, writer):
     TCP handler to receive satellite identity info from peers.
     Origin automatically adds/upgrades TRUSTED_SATELLITES.
     """
+    """
+    Satellite → Origin registration channel
+    """
+    peer_ip = writer.get_extra_info("peername")[0]
+
     try:
-        data = await reader.read(1024)
-        info = json.loads(data.decode('utf-8'))
+        data = await reader.read(4096)
+        payload = json.loads(data.decode())
 
-        incoming_sat_id = info.get("sat_id")
-        incoming_tls_fingerprint = info.get("fingerprint")
-        incoming_advertised_ip = info.get("advertised_ip")
-        incoming_listen_port = info.get("port")
+        sat_id = payload["id"]
+        fingerprint = payload["fingerprint"]
+        ip = payload["ip"]
+        port = payload["port"]
 
-        # Origin updates its registry
-        if IS_ORIGIN and incoming_sat_id:
-            add_or_update_trusted_registry(
-                sat_id=incoming_sat_id,
-                fingerprint=incoming_tls_fingerprint,
-                hostname=incoming_advertised_ip,
-                port=incoming_listen_port
-            )
-            # Sign and save updated list.json
+        # Only origin accepts registrations
+        if IS_ORIGIN:
+            TRUSTED_SATELLITES[sat_id] = {
+                "id": sat_id,
+                "fingerprint": fingerprint,
+                "ip": ip,
+                "port": port,
+            }
+
             sign_and_save_satellite_list()
+            UI_NOTIFICATIONS.put_nowait(f"Satellite registered: {sat_id}")
 
+    except Exception as e:
+        UI_NOTIFICATIONS.put_nowait(f"Node sync error from {peer_ip}")
+
+    finally:
         writer.close()
         await writer.wait_closed()
 
-    except Exception as e:
-        print(f"[NODE SYNC ERROR] {e}")
+async def announce_to_origin():
+    """
+    Followers announce themselves to origin
+    """
+    await asyncio.sleep(3)  # allow boot to finish
+
+    if IS_ORIGIN:
+        return
+
+    try:
+        reader, writer = await asyncio.open_connection(ORIGIN_HOST, LISTEN_PORT)
+
+        payload = {
+            "id": SATELLITE_ID,
+            "fingerprint": TLS_FINGERPRINT,
+            "ip": ADVERTISED_IP,
+            "port": LISTEN_PORT,
+        }
+
+        writer.write(json.dumps(payload).encode())
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    except Exception:
+        UI_NOTIFICATIONS.put_nowait("Failed to reach origin")
+
 
 # --- UI Loop ---
 async def draw_ui():
@@ -752,6 +787,7 @@ async def main():
     asyncio.create_task(sync_registry_from_github())
 
     asyncio.create_task(sync_nodes_with_peers())
+    asyncio.create_task(announce_to_origin())
 
     # Start TCP server (placeholder) to accept connections
     server = await asyncio.start_server(handle_node_sync, LISTEN_HOST, LISTEN_PORT)
