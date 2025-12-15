@@ -542,6 +542,39 @@ def generate_keys_and_certs():
 
 # --- UI Loop ---
 async def draw_ui():
+        """
+    STEP 5: TERMINAL UI (User Interface / Status Display)
+
+    Continuously displays the satellite's internal state in the terminal.
+    Runs asynchronously in parallel with background tasks and TCP listener.
+
+    Purpose in boot/runtime:
+    - Provides a human-readable view of:
+        - Connected nodes
+        - Repair queue status
+        - Recent notifications
+        - Suspicious activity advisory
+        - Satellite identity (SATELLITE_ID, TLS fingerprint)
+        - Number of trusted satellites
+    - Helps operators monitor the satellite node in real time.
+    - Does not modify core state, only reads global variables for display.
+
+    How it works:
+    1. Clears the terminal screen each loop iteration (supports POSIX and Windows).
+    2. Prints formatted sections:
+       - Node Status: shows connected nodes and last seen time.
+       - Repair Queue: lists fragment repair jobs and status (or empty).
+       - Notifications: shows up to the 4 most recent messages from UI_NOTIFICATIONS queue.
+       - Suspicious IPs Advisory: placeholder for security alerts (currently static).
+       - Satellite ID + TLS Fingerprint: shows current identity, advertised IP, origin status, TLS fingerprint, and trusted satellites count.
+    3. Sleeps for 2 seconds to throttle UI refresh.
+    4. Loop repeats indefinitely.
+
+    Notes:
+    - Uses global state: NODES, REPAIR_QUEUE, UI_NOTIFICATIONS, TRUSTED_SATELLITES, SATELLITE_ID, TLS_FINGERPRINT, IS_ORIGIN, ADVERTISED_IP.
+    - Fully asynchronous and never blocks other background tasks.
+    - Complements STEP 5 in the remark section: UI runs in parallel with registry sync and TCP listener.
+    """
     while True:
         os.system('clear' if os.name == 'posix' else 'cls')
         print("="*54 + "\n                Satellite Node Status\n" + "="*54)
@@ -569,6 +602,49 @@ async def draw_ui():
         await asyncio.sleep(2)
 
 async def main():
+        """
+    STEP 1–5: BOOT SEQUENCE ORCHESTRATION
+
+    Entry point for the satellite node. Performs initialization,
+    role determination, key/certificate setup, trusted registry handling,
+    and starts UI & background tasks.
+
+    Purpose in boot sequence:
+    - STEP 1: Initialization (implicit via global state)
+    - STEP 2: Role Definition (FORCE_ORIGIN determines origin/follower)
+    - STEP 3: Key Recovery & Trust Setup
+        - Fetch origin_pubkey.pem for non-origin satellites
+        - Generate local keys and certificates
+        - Load or verify trusted satellites registry
+        - Add origin satellite to registry if applicable
+    - STEP 4: Identity Establishment
+        - SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP set
+    - STEP 5: UI & Background Tasks
+        - Launch terminal UI
+        - Launch periodic registry sync
+        - Start TCP listener
+
+    How it works:
+    1. If this satellite is NOT origin (FORCE_ORIGIN=False):
+       - Fetch origin public key from GitHub once via `fetch_github_file()`.
+    2. Generate keys and certificates locally (`generate_keys_and_certs()`).
+    3. Load and verify the trusted satellites registry (`load_trusted_satellites()`).
+    4. Origin satellites automatically add themselves to the registry
+       for GitHub distribution (`add_or_update_trusted_registry()`).
+    5. Start asynchronous background tasks:
+       - `draw_ui()`: terminal UI
+       - `sync_registry_from_github()`: periodic trusted registry updates
+    6. Start TCP server to listen for connections (currently placeholder lambda).
+       - Runs indefinitely using `serve_forever()`.
+
+    Notes:
+    - Orchestrates **entire satellite boot sequence**.
+    - Updates and relies on global state: ORIGIN_PUBKEY_PEM, SATELLITE_ID,
+      TLS_FINGERPRINT, ADVERTISED_IP, TRUSTED_SATELLITES, etc.
+    - Fully matches remark section steps 1–5.
+    - Ensures the satellite is ready for operation with identity,
+      trust verification, UI, and networking.
+    """
     global ORIGIN_PUBKEY_PEM
     # Standard satellites pull pubkey ONCE from GitHub
     if not FORCE_ORIGIN:
@@ -579,10 +655,12 @@ async def main():
     
     # Origin auto-adds itself to registry for distribution
     add_or_update_trusted_registry(SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP, LISTEN_PORT)
-    
+
+    # Launch UI and registry sync in background
     asyncio.create_task(draw_ui())
     asyncio.create_task(sync_registry_from_github())
-    
+
+    # Start TCP server (placeholder) to accept connections
     server = await asyncio.start_server(lambda r, w: None, LISTEN_HOST, LISTEN_PORT)
     async with server: await server.serve_forever()
 
