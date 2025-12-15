@@ -4,22 +4,52 @@ PROJECT: LibreMesh Satellite (Control Plane)
 VERSION: 2025.12.15
 ===============================================================================
 
-CORE ARCHITECTURE RULES FOR AI & DEVELOPERS:
---------------------------------------------
+CORE ARCHITECTURE RULES:
+------------------------
 1. CONTROL PLANE vs DATA PLANE:
-   - This is a "Satellite" (Control Plane). It DOES NOT store data fragments.
-   - RULE: The Satellite MUST NEVER be listed in the 'Node Status' UI table.
+   - This script is a "Satellite" (Control Plane). It DOES NOT store data.
+   - Satellite MUST NEVER be listed in the 'Node Status' UI table.
 
-2. BOOT SEQUENCE & EXECUTION LOGIC:
-   - STEP 1: INITIALIZATION: Global states (NODES, TRUSTED_SATELLITES) are set.
+2. BOOT SEQUENCE:
+   - STEP 1: INITIALIZATION: Global states (NODES, TRUSTED_SATELLITES).
    - STEP 2: IDENTITY: 'cert.pem' defines the TLS identity/fingerprint.
    - STEP 3: ROLE: Determined by 'FORCE_ORIGIN' and 'origin_privkey.pem'.
    - STEP 4: UI & LISTENING: Parallel background tasks for UI and TCP server.
 
-3. SECURITY & DISTRIBUTION:
-   - 'origin_pubkey.pem' is the source of truth for verification. 
-   - Distribution can be automated via a trusted GitHub repository (2FA).
-   - Identity is strictly enforced via TLS Fingerprints.
+3. VISUAL TERMINAL LAYOUT EXAMPLE:
+----------------------------------
+======================================================
+                Satellite Node Status
+======================================================
+Node ID            | Rank | Last Seen (s) | Uptime (s)
+------------------------------------------------------
+No nodes connected  | N/A  | N/A           | N/A
+
+======================================================
+                     Repair Queue
+======================================================
+Job ID (Fragment)              | Status | Claimed By
+------------------------------------------------------
+Queue is empty                 | N/A    | N/A
+
+======================================================
+                     Notifications
+======================================================
+
+======================================================
+               Suspicious IPs Advisory
+======================================================
+No suspicious activity detected.
+
+======================================================
+            Satellite ID + TLS Fingerprint
+======================================================
+Satellite ID:          localhost
+Advertising IP:        192.168.0.163
+Origin Status:         ORIGIN
+TLS Fingerprint:       QPNZ8dUCgc81cZX2yBp0rVsZSKm4FSw43Ax0NL5OdH4=
+Trusted Satellites:    1 in list.json
+======================================================
 
 ===============================================================================
 """
@@ -46,9 +76,9 @@ from datetime import datetime, timedelta
 LISTEN_HOST = '0.0.0.0'
 LISTEN_PORT = 8888
 ADVERTISED_IP_CONFIG = '192.168.0.163' 
-FORCE_ORIGIN = True # SAFEGUARD: True allows key generation; False prevents it.
+FORCE_ORIGIN = True 
 
-NODES = {} # Tracks remote STORAGE NODES only
+NODES = {} 
 REPAIR_QUEUE = asyncio.Queue()
 SATELLITE_ID = None
 TLS_FINGERPRINT = None
@@ -65,7 +95,7 @@ TRUSTED_SATELLITES = {}
 ADVERTISED_IP = None
 LIST_UPDATED_PENDING_SAVE = False
 
-# --- Core Logic ---
+# --- Helper Functions ---
 def get_local_ip():
     return ADVERTISED_IP_CONFIG if ADVERTISED_IP_CONFIG else socket.gethostbyname(socket.gethostname())
 
@@ -181,14 +211,9 @@ async def save_list_periodically():
 async def main():
     generate_keys_and_certs()
     load_trusted_satellites()
-    
-    # Registry sync, but Satellite does not join the Node Status table
     add_or_update_trusted_registry(SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP, LISTEN_PORT)
-    
     asyncio.create_task(draw_ui())
     asyncio.create_task(save_list_periodically())
-    
-    # Listener is active but currently has a placeholder handler
     server = await asyncio.start_server(lambda r, w: None, LISTEN_HOST, LISTEN_PORT)
     async with server: await server.serve_forever()
 
