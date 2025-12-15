@@ -585,25 +585,34 @@ def generate_keys_and_certs():
 
 async def handle_node_sync(reader, writer):
     """
-    Receives a JSON-encoded NODES dict from a peer, merges it, and
-    returns our own NODES dict.
+    TCP handler to receive satellite identity info from peers.
+    Origin automatically adds/upgrades TRUSTED_SATELLITES.
     """
     try:
-        data = await reader.read(65536)
-        peer_nodes = json.loads(data.decode('utf-8'))
+        data = await reader.read(1024)
+        info = json.loads(data.decode('utf-8'))
 
-        for node_id, last_seen in peer_nodes.items():
-            if node_id not in NODES or last_seen > NODES[node_id]:
-                NODES[node_id] = last_seen
+        incoming_sat_id = info.get("sat_id")
+        incoming_tls_fingerprint = info.get("fingerprint")
+        incoming_advertised_ip = info.get("advertised_ip")
+        incoming_listen_port = info.get("port")
 
-        # Send back our current NODES for merge
-        writer.write(json.dumps(NODES).encode('utf-8'))
-        await writer.drain()
-    except Exception:
-        pass
-    finally:
+        # Origin updates its registry
+        if IS_ORIGIN and incoming_sat_id:
+            add_or_update_trusted_registry(
+                sat_id=incoming_sat_id,
+                fingerprint=incoming_tls_fingerprint,
+                hostname=incoming_advertised_ip,
+                port=incoming_listen_port
+            )
+            # Sign and save updated list.json
+            sign_and_save_satellite_list()
+
         writer.close()
         await writer.wait_closed()
+
+    except Exception as e:
+        print(f"[NODE SYNC ERROR] {e}")
 
 # --- UI Loop ---
 async def draw_ui():
@@ -721,6 +730,23 @@ async def main():
     # Origin auto-adds itself to registry for distribution
     add_or_update_trusted_registry(SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP, LISTEN_PORT)
 
+    # Follower reports itself to origin
+    if not IS_ORIGIN:
+        try:
+            reader, writer = await asyncio.open_connection(ORIGIN_HOST, LISTEN_PORT)
+            info = {
+                "sat_id": SATELLITE_ID,
+                "fingerprint": TLS_FINGERPRINT,
+                "advertised_ip": ADVERTISED_IP,
+                "port": LISTEN_PORT
+            }
+            writer.write(json.dumps(info).encode('utf-8'))
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+        except Exception as e:
+            print(f"[SYNC TO ORIGIN FAILED] {e}")
+    
     # Launch UI and registry sync in background
     asyncio.create_task(draw_ui())
     asyncio.create_task(sync_registry_from_github())
