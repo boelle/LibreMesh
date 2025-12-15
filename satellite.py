@@ -613,6 +613,8 @@ async def handle_node_sync(reader, writer):
                 "fingerprint": fingerprint,
                 "hostname": ip,
                 "port": port,
+                "nodes": payload.get("nodes", {}),           # Nodes this satellite knows
+                "repair_queue": payload.get("repair_queue", [])  # Repair jobs known to this satellite
             }
 
             sign_and_save_satellite_list()
@@ -794,6 +796,10 @@ async def main():
     if not FORCE_ORIGIN:
         await fetch_github_file(ORIGIN_PUBKEY_URL, ORIGIN_PUBKEY_PATH)
 
+    # Start periodic node → origin sync
+    if not IS_ORIGIN:
+        asyncio.create_task(node_sync_loop())
+    
     generate_keys_and_certs()
     load_trusted_satellites()
     
@@ -829,6 +835,38 @@ async def main():
     # Start TCP server (placeholder) to accept connections
     server = await asyncio.start_server(handle_node_sync, LISTEN_HOST, LISTEN_PORT)
     async with server: await server.serve_forever()
+
+# -------------------------------
+# Node → Origin Sync (non-origin satellites)
+# -------------------------------
+async def push_status_to_origin():
+    if IS_ORIGIN:
+        return  # Origin does not push to itself
+
+    payload = {
+        "id": SATELLITE_ID,
+        "fingerprint": TLS_FINGERPRINT,
+        "ip": ADVERTISED_IP,
+        "port": LISTEN_PORT,
+        "nodes": NODES,
+        "repair_queue": list(REPAIR_QUEUE._queue)
+    }
+
+    try:
+        reader, writer = await asyncio.open_connection(ORIGIN_HOST, ORIGIN_PORT)
+        writer.write(json.dumps(payload).encode())
+        await writer.drain()
+    except Exception as e:
+        UI_NOTIFICATIONS.put_nowait(f"Node push error: {e}")
+    finally:
+        if 'writer' in locals():
+            writer.close()
+            await writer.wait_closed()
+
+async def node_sync_loop():
+    while True:
+        await push_status_to_origin()
+        await asyncio.sleep(NODE_SYNC_INTERVAL)
 
 if __name__ == "__main__":
     try: asyncio.run(main())
