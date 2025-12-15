@@ -604,6 +604,12 @@ async def handle_node_sync(reader, writer):
     try:
         data = await reader.read(4096)
         payload = json.loads(data.decode())
+        required_keys = {"id", "fingerprint", "ip", "port"}
+
+        if not required_keys.issubset(payload):
+            raise ValueError(
+                f"Invalid node sync payload keys={list(payload.keys())}"
+            )
 
         sat_id = payload["id"]
         fingerprint = payload["fingerprint"]
@@ -633,7 +639,7 @@ async def handle_node_sync(reader, writer):
                     UI_NOTIFICATIONS.put_nowait(f"Satellite updated: {sat_id}")
 
     except Exception as e:
-        UI_NOTIFICATIONS.put_nowait(f"Node sync error from {peer_ip}")
+        UI_NOTIFICATIONS.put_nowait(f"Node sync error from {peer_ip}: {type(e).__name__}: {e}")
 
     finally:
         writer.close()
