@@ -16,7 +16,12 @@ CORE ARCHITECTURE RULES:
    - STEP 3: ROLE: Determined by 'FORCE_ORIGIN' and 'origin_privkey.pem'.
    - STEP 4: UI & LISTENING: Parallel background tasks for UI and TCP server.
 
-3. VISUAL TERMINAL LAYOUT EXAMPLE:
+3. SECURITY & DISTRIBUTION:
+   - 'FORCE_ORIGIN = False' prevents accidental master key generation.
+   - Standard satellites fetch the master public key from a trusted GitHub URL.
+   - Verification MUST happen via 'origin_pubkey.pem' before list.json is trusted.
+
+4. VISUAL TERMINAL LAYOUT EXAMPLE:
 ----------------------------------
 ======================================================
                 Satellite Node Status
@@ -63,6 +68,7 @@ import os
 import textwrap
 import base64
 import sys
+import urllib.request
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -76,7 +82,10 @@ from datetime import datetime, timedelta
 LISTEN_HOST = '0.0.0.0'
 LISTEN_PORT = 8888
 ADVERTISED_IP_CONFIG = '192.168.0.163' 
-FORCE_ORIGIN = True 
+
+# ROLE CONFIGURATION
+FORCE_ORIGIN = True # Set to False for standard satellites to prevent key gen
+ORIGIN_PUBKEY_URL = "https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/origin_pubkey.pem"
 
 NODES = {} 
 REPAIR_QUEUE = asyncio.Queue()
@@ -99,6 +108,23 @@ LIST_UPDATED_PENDING_SAVE = False
 def get_local_ip():
     return ADVERTISED_IP_CONFIG if ADVERTISED_IP_CONFIG else socket.gethostbyname(socket.gethostname())
 
+async def fetch_origin_pubkey():
+    """Attempts to download the master public key from GitHub if missing."""
+    if not os.path.exists(ORIGIN_PUBKEY_PATH):
+        UI_NOTIFICATIONS.put_nowait("Fetching master public key from GitHub...")
+        try:
+            # Using loop.run_in_executor to keep urllib non-blocking
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, lambda: urllib.request.urlopen(ORIGIN_PUBKEY_URL).read())
+            with open(ORIGIN_PUBKEY_PATH, "wb") as f:
+                f.write(response)
+            UI_NOTIFICATIONS.put_nowait("Master public key successfully updated from GitHub.")
+            return True
+        except Exception as e:
+            UI_NOTIFICATIONS.put_nowait(f"GitHub Fetch Failed: {e}")
+            return False
+    return True
+
 def add_or_update_trusted_registry(sat_id, fingerprint, hostname, port):
     global LIST_UPDATED_PENDING_SAVE
     if not IS_ORIGIN: return
@@ -115,6 +141,11 @@ def load_trusted_satellites():
             with open(LIST_JSON_PATH, 'r') as f:
                 signed_data = json.load(f)
             data = signed_data['data']
+            # Security Check: Ensure we have a key to verify the signature
+            if not ORIGIN_PUBKEY_PEM:
+                UI_NOTIFICATIONS.put_nowait("Registry Warning: No public key found for verification.")
+                return
+
             public_key = serialization.load_pem_public_key(ORIGIN_PUBKEY_PEM, backend=default_backend())
             signature = base64.b64decode(signed_data['signature'])
             json_data_bytes = json.dumps(data, indent=4, sort_keys=True).encode('utf-8')
@@ -122,7 +153,7 @@ def load_trusted_satellites():
             for sat in data['satellites']:
                 TRUSTED_SATELLITES[sat['id']] = sat
         except Exception as e:
-            UI_NOTIFICATIONS.put_nowait(f"Registry Error: {e}")
+            UI_NOTIFICATIONS.put_nowait(f"Registry Verification Error: {e}")
 
 def sign_and_save_satellite_list():
     global LIST_UPDATED_PENDING_SAVE
@@ -140,6 +171,7 @@ def sign_and_save_satellite_list():
 
 def generate_keys_and_certs():
     global SATELLITE_ID, TLS_FINGERPRINT, IS_ORIGIN, ADVERTISED_IP, ORIGIN_PUBKEY_PEM, ORIGIN_PRIVKEY_PEM
+    # 1. TLS Identity Generation
     if not os.path.exists(CERT_PATH):
         key = rsa.generate_private_key(65537, 2048)
         subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, u"localhost")])
@@ -147,22 +179,31 @@ def generate_keys_and_certs():
         with open(KEY_PATH, "wb") as f: f.write(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
         with open(CERT_PATH, "wb") as f: f.write(cert.public_bytes(serialization.Encoding.PEM))
 
-    if not os.path.exists(ORIGIN_PUBKEY_PATH):
-        if FORCE_ORIGIN:
-            IS_ORIGIN = True
-            priv = rsa.generate_private_key(65537, 2048)
-            ORIGIN_PUBKEY_PEM = priv.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
-            ORIGIN_PRIVKEY_PEM = priv.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption())
-            with open(ORIGIN_PUBKEY_PATH, "wb") as f: f.write(ORIGIN_PUBKEY_PEM)
-            with open(ORIGIN_PRIVKEY_PATH, "wb") as f: f.write(ORIGIN_PRIVKEY_PEM)
-    else:
+    # 2. Master Key Determination
+    if os.path.exists(ORIGIN_PRIVKEY_PATH):
+        # Found local private key -> Node is an Origin
         with open(ORIGIN_PUBKEY_PATH, "rb") as f: ORIGIN_PUBKEY_PEM = f.read()
-        if os.path.exists(ORIGIN_PRIVKEY_PATH):
-            with open(ORIGIN_PRIVKEY_PATH, "rb") as f: ORIGIN_PRIVKEY_PEM = f.read()
-            IS_ORIGIN = True
+        with open(ORIGIN_PRIVKEY_PATH, "rb") as f: ORIGIN_PRIVKEY_PEM = f.read()
+        IS_ORIGIN = True
+    elif os.path.exists(ORIGIN_PUBKEY_PATH):
+        # Found only local public key -> Node is a Satellite
+        with open(ORIGIN_PUBKEY_PATH, "rb") as f: ORIGIN_PUBKEY_PEM = f.read()
+        IS_ORIGIN = False
+    elif FORCE_ORIGIN:
+        # No keys found, but FORCE_ORIGIN is True -> Generate new Master keys
+        IS_ORIGIN = True
+        priv = rsa.generate_private_key(65537, 2048)
+        ORIGIN_PUBKEY_PEM = priv.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        ORIGIN_PRIVKEY_PEM = priv.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption())
+        with open(ORIGIN_PUBKEY_PATH, "wb") as f: f.write(ORIGIN_PUBKEY_PEM)
+        with open(ORIGIN_PRIVKEY_PATH, "wb") as f: f.write(ORIGIN_PRIVKEY_PEM)
+    else:
+        # No keys found and not forcing origin -> Will wait for GitHub fetch in main()
+        IS_ORIGIN = False
 
+    # 3. Attribute Extraction
     with open(CERT_PATH, 'rb') as f:
-        cert = x509.load_pem_x509_certificate(f.read())
+        cert = x509.load_pem_x509_certificate(f.read(), default_backend())
     
     cn_attrs = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
     SATELLITE_ID = cn_attrs[0].value if cn_attrs else "localhost"
@@ -174,8 +215,7 @@ async def draw_ui():
     while True:
         os.system('clear' if os.name == 'posix' else 'cls')
         print("="*54 + "\n                Satellite Node Status\n" + "="*54)
-        print(f"{'Node ID':<18} | {'Rank':<4} | {'Last Seen (s)':<13} | {'Uptime (s)':<10}")
-        print("-" * 54)
+        print(f"{'Node ID':<18} | {'Rank':<4} | {'Last Seen (s)':<13} | {'Uptime (s)':<10}\n" + "-" * 54)
         if not NODES: print("No nodes connected  | N/A  | N/A           | N/A")
         else:
             for k, v in NODES.items(): print(f"{k[:15]:<18} | Node | {int(time.time()-v):<13} | N/A")
@@ -209,11 +249,25 @@ async def save_list_periodically():
             sign_and_save_satellite_list()
 
 async def main():
+    # Initial setup
     generate_keys_and_certs()
+    
+    # If standard satellite and missing key, fetch from GitHub
+    if not IS_ORIGIN and not ORIGIN_PUBKEY_PEM:
+        await fetch_origin_pubkey()
+        # Reload key after fetch
+        if os.path.exists(ORIGIN_PUBKEY_PATH):
+            global ORIGIN_PUBKEY_PEM
+            with open(ORIGIN_PUBKEY_PATH, "rb") as f:
+                ORIGIN_PUBKEY_PEM = f.read()
+
     load_trusted_satellites()
     add_or_update_trusted_registry(SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP, LISTEN_PORT)
+    
+    # Background tasks
     asyncio.create_task(draw_ui())
     asyncio.create_task(save_list_periodically())
+    
     server = await asyncio.start_server(lambda r, w: None, LISTEN_HOST, LISTEN_PORT)
     async with server: await server.serve_forever()
 
