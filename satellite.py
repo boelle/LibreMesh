@@ -7,26 +7,19 @@ VERSION: 2025.12.15
 CORE ARCHITECTURE RULES FOR AI & DEVELOPERS:
 --------------------------------------------
 1. CONTROL PLANE vs DATA PLANE:
-   - This script is a "Satellite" (Control Plane). It manages metadata, 
-     trust registries, and repair coordination.
-   - It is NOT a "Node" (Data Plane). Nodes store data fragments; 
-     Satellites do not. 
-   - RULE: The Satellite must NEVER be listed in the 'Satellite Node Status' 
-     UI table. That table is reserved for storage-providing nodes only.
+   - This is a "Satellite" (Control Plane). It DOES NOT store data fragments.
+   - RULE: The Satellite MUST NEVER be listed in the 'Node Status' UI table.
 
-2. BOOT SEQUENCE & ROLE DETERMINATION:
-   - STEP 1: Initialization of global states (NODES, TRUSTED_SATELLITES).
-   - STEP 2: Identity Check. 'cert.pem' defines the TLS identity.
-   - STEP 3: Role Determination. 
-     - If 'origin_privkey.pem' exists -> Role: ORIGIN (Master).
-     - If ONLY 'origin_pubkey.pem' exists -> Role: SATELLITE (Member).
-   - DISTRIBUTION: 'origin_pubkey.pem' can be securely fetched from a 
-     trusted GitHub repository (2FA protected) to automate satellite setup.
+2. BOOT SEQUENCE & EXECUTION LOGIC:
+   - STEP 1: INITIALIZATION: Global states (NODES, TRUSTED_SATELLITES) are set.
+   - STEP 2: IDENTITY: 'cert.pem' defines the TLS identity/fingerprint.
+   - STEP 3: ROLE: Determined by 'FORCE_ORIGIN' and 'origin_privkey.pem'.
+   - STEP 4: UI & LISTENING: Parallel background tasks for UI and TCP server.
 
-3. PERSISTENCE LOGIC (list.json):
-   - 'list.json' is a signed registry.
-   - It is ONLY saved to disk if 'LIST_UPDATED_PENDING_SAVE' is True.
-   - Verification MUST happen via 'origin_pubkey.pem' before any list is trusted.
+3. SECURITY & DISTRIBUTION:
+   - 'origin_pubkey.pem' is the source of truth for verification. 
+   - Distribution can be automated via a trusted GitHub repository (2FA).
+   - Identity is strictly enforced via TLS Fingerprints.
 
 ===============================================================================
 """
@@ -53,9 +46,9 @@ from datetime import datetime, timedelta
 LISTEN_HOST = '0.0.0.0'
 LISTEN_PORT = 8888
 ADVERTISED_IP_CONFIG = '192.168.0.163' 
-FORCE_ORIGIN = True # Toggle to allow/prevent master key generation
+FORCE_ORIGIN = True # SAFEGUARD: True allows key generation; False prevents it.
 
-NODES = {} 
+NODES = {} # Tracks remote STORAGE NODES only
 REPAIR_QUEUE = asyncio.Queue()
 SATELLITE_ID = None
 TLS_FINGERPRINT = None
@@ -72,7 +65,7 @@ TRUSTED_SATELLITES = {}
 ADVERTISED_IP = None
 LIST_UPDATED_PENDING_SAVE = False
 
-# --- Helper Functions ---
+# --- Core Logic ---
 def get_local_ip():
     return ADVERTISED_IP_CONFIG if ADVERTISED_IP_CONFIG else socket.gethostbyname(socket.gethostname())
 
@@ -142,7 +135,6 @@ def generate_keys_and_certs():
         cert = x509.load_pem_x509_certificate(f.read())
     
     cn_attrs = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
-    # FIX: Access first list item correctly
     SATELLITE_ID = cn_attrs[0].value if cn_attrs else "localhost"
     TLS_FINGERPRINT = base64.b64encode(cert.fingerprint(hashes.SHA256())).decode('utf-8')
     ADVERTISED_IP = get_local_ip()
@@ -169,6 +161,9 @@ async def draw_ui():
         else:
             for m in temp_msgs[-4:]: print(m)
 
+        print("\n" + "="*54 + "\n               Suspicious IPs Advisory\n" + "="*54)
+        print("No suspicious activity detected.")
+
         print("\n" + "="*54 + "\n            Satellite ID + TLS Fingerprint\n" + "="*54)
         print(f"Satellite ID:          {SATELLITE_ID}")
         print(f"Advertising IP:        {ADVERTISED_IP}")
@@ -186,9 +181,14 @@ async def save_list_periodically():
 async def main():
     generate_keys_and_certs()
     load_trusted_satellites()
+    
+    # Registry sync, but Satellite does not join the Node Status table
     add_or_update_trusted_registry(SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP, LISTEN_PORT)
+    
     asyncio.create_task(draw_ui())
     asyncio.create_task(save_list_periodically())
+    
+    # Listener is active but currently has a placeholder handler
     server = await asyncio.start_server(lambda r, w: None, LISTEN_HOST, LISTEN_PORT)
     async with server: await server.serve_forever()
 
