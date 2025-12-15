@@ -589,11 +589,15 @@ def generate_keys_and_certs():
 
 async def handle_node_sync(reader, writer):
     """
-    TCP handler to receive satellite identity info from peers.
-    Origin automatically adds/upgrades TRUSTED_SATELLITES.
-    """
-    """
-    Satellite → Origin registration channel
+    Satellite → Origin registration and status sync channel.
+
+    Satellites connect to the origin and submit their identity, TLS fingerprint,
+    advertised hostname/IP, listening port, known storage nodes, and repair queue.
+
+    The origin validates the payload, updates TRUSTED_SATELLITES in-memory,
+    persists the signed registry, and emits a UI notification.
+
+    Non-origin nodes ignore incoming registrations.
     """
     peer_ip = writer.get_extra_info("peername")[0]
 
@@ -608,17 +612,25 @@ async def handle_node_sync(reader, writer):
 
         # Only origin accepts registrations
         if IS_ORIGIN:
-            TRUSTED_SATELLITES[sat_id] = {
+            existing = TRUSTED_SATELLITES.get(sat_id)
+
+            new_entry = {
                 "id": sat_id,
                 "fingerprint": fingerprint,
                 "hostname": ip,
                 "port": port,
-                "nodes": payload.get("nodes", {}),           # Nodes this satellite knows
-                "repair_queue": payload.get("repair_queue", [])  # Repair jobs known to this satellite
+                "nodes": payload.get("nodes", {}),
+                "repair_queue": payload.get("repair_queue", [])
             }
 
-            sign_and_save_satellite_list()
-            UI_NOTIFICATIONS.put_nowait(f"Satellite registered: {sat_id}")
+            if existing != new_entry:
+                TRUSTED_SATELLITES[sat_id] = new_entry
+                sign_and_save_satellite_list()
+
+                if existing is None:
+                    UI_NOTIFICATIONS.put_nowait(f"Satellite registered: {sat_id}")
+                else:
+                    UI_NOTIFICATIONS.put_nowait(f"Satellite updated: {sat_id}")
 
     except Exception as e:
         UI_NOTIFICATIONS.put_nowait(f"Node sync error from {peer_ip}")
@@ -626,7 +638,7 @@ async def handle_node_sync(reader, writer):
     finally:
         writer.close()
         await writer.wait_closed()
-
+        
 async def announce_to_origin():
     """
     Followers announce themselves to origin
