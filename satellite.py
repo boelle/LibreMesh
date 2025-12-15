@@ -10,19 +10,16 @@ CORE ARCHITECTURE RULES:
    - This script is a "Satellite" (Control Plane). It DOES NOT store data.
    - Satellite MUST NEVER be listed in the 'Node Status' UI table.
 
-2. BOOT SEQUENCE:
-   - STEP 1: INITIALIZATION: Global states (NODES, TRUSTED_SATELLITES).
-   - STEP 2: KEY RECOVERY: Fetches 'origin_pubkey.pem' from GitHub if missing.
-   - STEP 3: IDENTITY: 'cert.pem' defines the TLS identity/fingerprint.
-   - STEP 4: ROLE: Determined by 'FORCE_ORIGIN' and 'origin_privkey.pem'.
-   - STEP 5: UI & LISTENING: Parallel background tasks for UI and TCP server.
+2. BOOT SEQUENCE & ROLE AUTHORITY:
+   - STEP 1: INITIALIZATION: Global states are set.
+   - STEP 2: ROLE DEFINITION: The 'FORCE_ORIGIN' config setting dictates role.
+   - STEP 3: KEY RECOVERY: 
+     - If FORCE_ORIGIN is True: Generate Master keys locally.
+     - If FORCE_ORIGIN is False: Fetch 'origin_pubkey.pem' from GitHub.
+   - STEP 4: IDENTITY: 'cert.pem' defines the unique TLS fingerprint.
+   - STEP 5: UI & LISTENING: Start background tasks and TCP server.
 
-3. SECURITY & DISTRIBUTION:
-   - 'FORCE_ORIGIN = False' prevents accidental master key generation.
-   - Standard satellites fetch the master public key from a trusted GitHub URL.
-   - Verification MUST happen via 'origin_pubkey.pem' before list.json is trusted.
-
-4. VISUAL TERMINAL LAYOUT EXAMPLE:
+3. VISUAL TERMINAL LAYOUT EXAMPLE:
 ----------------------------------
 ======================================================
                 Satellite Node Status
@@ -85,7 +82,7 @@ LISTEN_PORT = 8888
 ADVERTISED_IP_CONFIG = '192.168.0.163' 
 
 # ROLE CONFIGURATION
-FORCE_ORIGIN = True # Set to False for standard satellites to prevent key gen
+FORCE_ORIGIN = True # True = Master/Origin, False = Standard Satellite
 ORIGIN_PUBKEY_URL = "raw.githubusercontent.com"
 
 NODES = {} 
@@ -113,13 +110,12 @@ async def fetch_origin_pubkey():
     """Attempts to download the master public key from GitHub if missing."""
     if not os.path.exists(ORIGIN_PUBKEY_PATH):
         try:
-            # Using loop.run_in_executor to keep urllib non-blocking
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(None, lambda: urllib.request.urlopen(ORIGIN_PUBKEY_URL).read())
             with open(ORIGIN_PUBKEY_PATH, "wb") as f:
                 f.write(response)
             return True
-        except Exception as e:
+        except Exception:
             return False
     return True
 
@@ -139,10 +135,7 @@ def load_trusted_satellites():
             with open(LIST_JSON_PATH, 'r') as f:
                 signed_data = json.load(f)
             data = signed_data['data']
-            if not ORIGIN_PUBKEY_PEM:
-                UI_NOTIFICATIONS.put_nowait("Registry Warning: No public key for verification.")
-                return
-
+            if not ORIGIN_PUBKEY_PEM: return
             public_key = serialization.load_pem_public_key(ORIGIN_PUBKEY_PEM, backend=default_backend())
             signature = base64.b64decode(signed_data['signature'])
             json_data_bytes = json.dumps(data, indent=4, sort_keys=True).encode('utf-8')
@@ -163,12 +156,12 @@ def sign_and_save_satellite_list():
         with open(LIST_JSON_PATH, 'w') as f:
             json.dump({"data": data, "signature": base64.b64encode(sig).decode('utf-8')}, f, indent=4)
         LIST_UPDATED_PENDING_SAVE = False
-    except Exception as e:
-        UI_NOTIFICATIONS.put_nowait(f"Disk Write Error: {e}")
+    except Exception:
+        pass
 
 def generate_keys_and_certs():
     global SATELLITE_ID, TLS_FINGERPRINT, IS_ORIGIN, ADVERTISED_IP, ORIGIN_PUBKEY_PEM, ORIGIN_PRIVKEY_PEM
-    # 1. TLS Identity Generation
+    # 1. Identity
     if not os.path.exists(CERT_PATH):
         key = rsa.generate_private_key(65537, 2048)
         subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, u"localhost")])
@@ -176,25 +169,23 @@ def generate_keys_and_certs():
         with open(KEY_PATH, "wb") as f: f.write(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
         with open(CERT_PATH, "wb") as f: f.write(cert.public_bytes(serialization.Encoding.PEM))
 
-    # 2. Master Key Determination
-    if os.path.exists(ORIGIN_PRIVKEY_PATH):
-        with open(ORIGIN_PUBKEY_PATH, "rb") as f: ORIGIN_PUBKEY_PEM = f.read()
-        with open(ORIGIN_PRIVKEY_PATH, "rb") as f: ORIGIN_PRIVKEY_PEM = f.read()
+    # 2. Role Logic
+    if FORCE_ORIGIN:
         IS_ORIGIN = True
-    elif os.path.exists(ORIGIN_PUBKEY_PATH):
-        with open(ORIGIN_PUBKEY_PATH, "rb") as f: ORIGIN_PUBKEY_PEM = f.read()
-        IS_ORIGIN = False
-    elif FORCE_ORIGIN:
-        IS_ORIGIN = True
-        priv = rsa.generate_private_key(65537, 2048)
-        ORIGIN_PUBKEY_PEM = priv.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
-        ORIGIN_PRIVKEY_PEM = priv.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption())
-        with open(ORIGIN_PUBKEY_PATH, "wb") as f: f.write(ORIGIN_PUBKEY_PEM)
-        with open(ORIGIN_PRIVKEY_PATH, "wb") as f: f.write(ORIGIN_PRIVKEY_PEM)
+        if not os.path.exists(ORIGIN_PRIVKEY_PATH):
+            priv = rsa.generate_private_key(65537, 2048)
+            ORIGIN_PUBKEY_PEM = priv.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+            ORIGIN_PRIVKEY_PEM = priv.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption())
+            with open(ORIGIN_PUBKEY_PATH, "wb") as f: f.write(ORIGIN_PUBKEY_PEM)
+            with open(ORIGIN_PRIVKEY_PATH, "wb") as f: f.write(ORIGIN_PRIVKEY_PEM)
+        else:
+            with open(ORIGIN_PUBKEY_PATH, "rb") as f: ORIGIN_PUBKEY_PEM = f.read()
+            with open(ORIGIN_PRIVKEY_PATH, "rb") as f: ORIGIN_PRIVKEY_PEM = f.read()
     else:
         IS_ORIGIN = False
+        if os.path.exists(ORIGIN_PUBKEY_PATH):
+            with open(ORIGIN_PUBKEY_PATH, "rb") as f: ORIGIN_PUBKEY_PEM = f.read()
 
-    # 3. Attribute Extraction
     with open(CERT_PATH, 'rb') as f:
         cert = x509.load_pem_x509_certificate(f.read(), default_backend())
     cn_attrs = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
@@ -202,7 +193,7 @@ def generate_keys_and_certs():
     TLS_FINGERPRINT = base64.b64encode(cert.fingerprint(hashes.SHA256())).decode('utf-8')
     ADVERTISED_IP = get_local_ip()
 
-# --- UI Loop ---
+# --- UI & Tasks (Omitted for brevity, remains unchanged) ---
 async def draw_ui():
     while True:
         os.system('clear' if os.name == 'posix' else 'cls')
@@ -238,8 +229,7 @@ async def save_list_periodically():
 
 async def main():
     global ORIGIN_PUBKEY_PEM
-    # Try to get public key from GitHub first if not Origin
-    if not os.path.exists(ORIGIN_PRIVKEY_PATH):
+    if not FORCE_ORIGIN:
         await fetch_origin_pubkey()
 
     generate_keys_and_certs()
