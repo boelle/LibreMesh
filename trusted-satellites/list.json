@@ -6,8 +6,16 @@
                 "fingerprint": "WYrQa+C2jcnzy/59/m8oxSDWtmbjLbPto96tbsCbwXA=",
                 "hostname": "192.168.0.163",
                 "port": 8888
+            },
+            {
+                "id": "LibreMesh-Sat-02",
+                "fingerprint": "HyvujgJGNZEB/g3mst+CNNPsx8bzbOoiMfPk8/9SHsQ=",
+                "hostname": "192.168.0.164",
+                "port": 8889,
+                "nodes": {},
+                "repair_queue": []
             }
         ]
     },
-    "signature": "fzPZDoZMAdU093umhfpMPsl3HOovihWpi8YHXSUCkdvEk+FlLckyAnJ0Q4OJ8ceVeBiehMJgWe1qvlsNgdzGarXxPKOzcl0rHK7AncKk5eDuxstJA+5sZSRovAPGFNLKWd3vCAjf8+XbaXl+ppfJoKBuu0hJegM2FjoQQd9aeVQZ5Ur0nbt57PtPcckpG7YkVX7KcdUlLCX7zfc1XWuBQB/6685/jm3XCB4sB1+ZdG/PlmOjusNhqBCLqv6+P0mIjr89/DoUY3jBRvsvFXcJ6QFaSXsKe1uq4FFMnLQGCTnvX3BovOtKoljTZ+xvenD1tGEzXz4e0jYzO76tDJDqVw=="
+    "signature": "WNQYTEkhxRlgs4ICVfBkPGPh3kiMM4cVUpfPFUNffMgB8AE8egUHgGcWy6G6/nnqMWRoOVBCP1Gv7hsKp2WgjL5S9DjxZxULPRR5B7WwqxxJNUu2azluf/Y7r7WVrHZsEYACYozL64YvUPzFuQstw6bc4kBs16ZoCGV8NP/9n5iyPkVHRsPahZRVVO/OhJil6BvazMM8rnqWPoTR3cd+69UeQRkfUspluS3cJZ+Drl3qfLo9asOSb6h7ja5qOPWqo6ngSHe9Gw9sZkvv/Tbh79knQ02YSUMUveeZT23Ti5C43ka0I6raKNjArWb6UW/BhX6D3knNSXlQYnamE0An2Q=="
 }
