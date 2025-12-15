@@ -210,6 +210,30 @@ LIST_UPDATED_PENDING_SAVE = False
 
 # --- Core Logic ---
 def get_local_ip():
+        """
+    STEP 4: IDENTITY ESTABLISHMENT (used to configure ADVERTISED_IP)
+
+    Returns the local IP address of the satellite for network advertisement.
+
+    Purpose in boot sequence:
+    - After identity is established (TLS certificate loaded),
+      the satellite needs to know its IP to advertise itself in the network.
+    - This IP is used when adding the satellite to TRUSTED_SATELLITES
+      and for display in the terminal UI.
+
+    How it works:
+    1. Checks if a configured IP (ADVERTISED_IP_CONFIG) exists:
+       - If set, returns this configured value.
+    2. Otherwise, falls back to the system hostname resolution using
+       socket.gethostbyname(socket.gethostname()).
+    3. Does not modify any global state; purely a read-only helper.
+
+    Notes:
+    - Provides a simple and reliable way to determine a local IP
+      for network registration.
+    - This function is called during STEP 4 (identity establishment)
+      before UI or background tasks are started.
+    """
     return ADVERTISED_IP_CONFIG if ADVERTISED_IP_CONFIG else socket.gethostbyname(socket.gethostname())
 
 async def fetch_github_file(url, local_path, force=False):
