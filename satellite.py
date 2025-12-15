@@ -237,29 +237,115 @@ def get_local_ip():
     return ADVERTISED_IP_CONFIG if ADVERTISED_IP_CONFIG else socket.gethostbyname(socket.gethostname())
 
 async def fetch_github_file(url, local_path, force=False):
-    """Generic helper to pull files from GitHub. Only pulls once unless forced."""
+    """
+    STEP 3: KEY MATERIAL AND TRUST SETUP (for non-origin satellites)
+
+    Generic helper to fetch files from GitHub and save them locally.
+    Used to obtain:
+      - origin_pubkey.pem for trust verification (non-origin satellites)
+      - list.json for the trusted-satellites registry
+
+    Purpose in boot sequence:
+    - Ensures non-origin satellites can retrieve trusted files needed for
+      verification and establishing trust.
+    - Origin satellites usually skip this step.
+    - Only downloads files once unless `force=True`.
+
+    How it works:
+    1. Checks if the file already exists locally:
+       - If it exists and `force=False`, skips download.
+       - Otherwise, proceeds to fetch.
+    2. Uses `asyncio.get_event_loop()` with `run_in_executor` to perform
+       a synchronous `urllib.request.urlopen()` in a non-blocking manner.
+    3. Reads the response content and writes it to `local_path`.
+    4. Returns True if successful, False if an exception occurs.
+    5. Returns True immediately if file already exists and `force=False`.
+
+    Notes:
+    - This function is asynchronous; must be awaited.
+    - Does not modify global state other than writing the local file.
+    - Fits into STEP 3: Key recovery / trust setup during boot.
+    """
     if not os.path.exists(local_path) or force:
         try:
+            # Fetch file content from GitHub synchronously in a thread-safe way
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(None, lambda: urllib.request.urlopen(url).read())
+            # Write content to local file
             with open(local_path, "wb") as f:
                 f.write(response)
             return True
         except Exception:
             return False
+    # File already exists and force not requested
     return True
 
 async def sync_registry_from_github():
-    """Periodic task: Satellites pull the signed list.json to learn who is trusted."""
+        """
+    STEP 5: BACKGROUND TASK / MAINTENANCE LOOP
+
+    Periodically fetches the signed trusted-satellites list (list.json) from GitHub
+    and updates the local TRUSTED_SATELLITES registry.
+
+    Purpose in boot sequence:
+    - Keeps non-origin satellites up-to-date with the current network of trusted satellites.
+    - Runs asynchronously in parallel with the terminal UI (draw_ui) and TCP listener.
+    - Ensures satellites can verify fragments and trust relationships without manual intervention.
+
+    How it works:
+    1. Runs an infinite loop (`while True`), so this is a perpetual background task.
+    2. Checks if the satellite is NOT origin (IS_ORIGIN=False):
+       - Only non-origin satellites fetch updates; origin already has authoritative state.
+    3. Calls `fetch_github_file()` with `force=True`:
+       - Always downloads the latest list.json to ensure the registry is current.
+    4. Calls `load_trusted_satellites()` to verify signatures and update TRUSTED_SATELLITES.
+    5. Sleeps for SYNC_INTERVAL seconds before repeating, controlling the polling frequency.
+
+    Notes:
+    - This function is asynchronous and should be started with `asyncio.create_task()`.
+    - Runs indefinitely in the background; never blocks the main thread.
+    - Fully fits within STEP 5 of the remark section (background maintenance & trust updates).
+    """
+    
     while True:
         if not IS_ORIGIN:
             # We always pull list.json because it updates frequently
             await fetch_github_file(LIST_JSON_URL, LIST_JSON_PATH, force=True)
             load_trusted_satellites()
+        # Wait before next sync to reduce GitHub requests
         await asyncio.sleep(SYNC_INTERVAL)
 
 def add_or_update_trusted_registry(sat_id, fingerprint, hostname, port):
-    """Origin-only: Adds a satellite to the registry for GitHub distribution."""
+        """
+    STEP 3–5: ORIGIN TRUST REGISTRY UPDATE
+
+    Adds or updates a satellite in the TRUSTED_SATELLITES registry.
+    This is only executed by the origin satellite to maintain authoritative state.
+
+    Purpose in boot/runtime:
+    - Ensures the origin maintains an up-to-date list of trusted satellites.
+    - Updates are then reflected in list.json for distribution via GitHub.
+    - Notifies the UI that the registry changed.
+
+    How it works:
+    1. Checks if this satellite is the origin (IS_ORIGIN=True):
+       - Non-origin satellites skip this function entirely.
+    2. Constructs a dictionary `new_details` containing:
+       - 'id': SATELLITE_ID of the satellite
+       - 'fingerprint': TLS fingerprint
+       - 'hostname': advertised host/IP
+       - 'port': listening port
+    3. Checks if this satellite ID is new or if details have changed:
+       - If new or updated, writes the details to TRUSTED_SATELLITES.
+    4. Sends a notification to the UI via `UI_NOTIFICATIONS.put_nowait()`.
+    5. Flags `LIST_UPDATED_PENDING_SAVE = True` to indicate registry changes
+       should be written back to list.json.
+
+    Notes:
+    - This is an **origin-only operation**; follower satellites never execute it.
+    - The function updates **global state** and triggers UI notifications.
+    - Fits into STEP 3 (key/trust setup) and STEP 5 (background/UI updates) in the remark section.
+    """
     global LIST_UPDATED_PENDING_SAVE
     if not IS_ORIGIN: return
     new_details = {"id": sat_id, "fingerprint": fingerprint, "hostname": hostname, "port": port}
