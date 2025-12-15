@@ -4,133 +4,95 @@ PROJECT: LibreMesh Satellite (Control Plane)
 VERSION: 2025.12.15 (GitHub Truth & Security Polished)
 ===============================================================================
 
-1. INITIALIZATION (MEMORY SETUP):
----------------------------------
+================================================================================
+SATELLITE BOOT SEQUENCE AND RUNTIME BEHAVIOR
+================================================================================
 
-The program creates all global state:
+This satellite program may run either as the **origin authority** or as a **regular satellite**.
+It coordinates trusted satellites and nodes in the network. The program runs
+asynchronously with a terminal UI, a background registry sync task, and a TCP listener.
 
- - Known nodes
+--------------------------------------------------------------------------------
+STEP 1: INITIALIZATION (GLOBAL STATE SETUP)
+--------------------------------------------------------------------------------
+- All global variables and constants are defined:
+    - NODES: tracks known nodes
+    - TRUSTED_SATELLITES: tracks known satellites
+    - REPAIR_QUEUE: tasks for fragment repair
+    - Config flags (e.g., FORCE_ORIGIN)
+- At this point:
+    - No network activity exists
+    - No identity has been established
+    - No UI is running
+- Purpose: prepare memory for the satellite’s runtime.
 
- - Trusted satellites
+--------------------------------------------------------------------------------
+STEP 2: ROLE DECISION
+--------------------------------------------------------------------------------
+- The FORCE_ORIGIN flag determines this satellite’s role:
+    - True  → Origin authority
+    - False → Regular follower
+- Role affects:
+    - Whether master signing keys are generated
+    - Which public keys are trusted
+    - Whether the satellite auto-registers itself
 
- - Repair queues
+--------------------------------------------------------------------------------
+STEP 3: KEY MATERIAL AND TRUST SETUP
+--------------------------------------------------------------------------------
+- TLS certificate and key:
+    - Generated locally if missing (self-signed)
+    - Used to derive SATELLITE_ID and TLS_FINGERPRINT
+- Origin signing keys (only if origin):
+    - Generated if missing
+    - Stored locally for authority verification
+- Non-origin satellites:
+    - Fetch origin public key or list.json from GitHub once
+    - Store locally for trust verification
+- Origin auto-adds itself to TRUSTED_SATELLITES.
 
- - Runtime flags and configuration
+--------------------------------------------------------------------------------
+STEP 4: IDENTITY ESTABLISHMENT
+--------------------------------------------------------------------------------
+- TLS certificate fingerprint defines the satellite’s **unique identity**.
+- SATELLITE_ID = SHA-256(cert.pem)
+- ADVERTISED_IP is configured and stored.
+- IS_ORIGIN flag reflects role decision.
+- Ensures identity exists **before UI and network tasks start**.
 
-At this point:
+--------------------------------------------------------------------------------
+STEP 5: UI AND BACKGROUND TASKS
+--------------------------------------------------------------------------------
+- UI loop (draw_ui) is started asynchronously:
+    - Displays SATELLITE_ID, nodes, satellites, repair queue, notifications
+    - Always reads **current internal state**
+- Background sync task (sync_registry_from_github) is started asynchronously:
+    - Periodically fetches list.json from GitHub
+    - Verifies signatures
+    - Updates TRUSTED_SATELLITES
+- Both tasks run in parallel to the main event loop.
 
- - No network activity exists
+--------------------------------------------------------------------------------
+STEP 6: NETWORK LISTENER
+--------------------------------------------------------------------------------
+- TCP server is started on configured host/port.
+- Handler is currently a no-op (accepts connections but does not process messages).
+- Ensures satellite is reachable by the network.
 
- - No identity has been established
+--------------------------------------------------------------------------------
+STEP 7: STEADY-STATE BEHAVIOR
+--------------------------------------------------------------------------------
+- The program enters serve_forever:
+    - UI loop continues updating terminal
+    - Background sync task continues running
+    - TCP server accepts connections passively
+- Runs indefinitely until manually stopped.
+- Internal state updates (e.g., TRUSTED_SATELLITES) occur only via defined tasks.
+- Remark section STEP 8 describes this steady-state accurately.
 
- - No UI is running
-
-This step only prepares internal memory.
-
-2. ROLE DECISION (ORIGIN OR SATELLITE)
-----------------------------------------
-
-The FORCE_ORIGIN setting determines the role:
-
- - If True, this instance acts as the origin authority
-
- - If False, this instance acts as a regular satellite
-
-This role affects:
-
- - Which keys are generated
-
- - Which keys are trusted
-
- - Whether this instance publishes authority data
-
-3. KEY MATERIAL AND TRUST SETUP
--------------------------------
-
-The program ensures cryptographic material exists:
-
-If this instance is the origin:
-
- - Generate origin signing keys if missing
-
- - Trust itself as the root authority
-
-If this instance is not the origin:
-
- - Fetch the origin’s public key once
-
- - Store it locally for future trust verification
-
-This step establishes who is allowed to define truth in the network.
-
-4. IDENTITY ESTABLISHMENT
--------------------------
-
-A TLS certificate is created or loaded
-
-The certificate’s fingerprint becomes:
-
- - The unique identity of this satellite
-
-This identity is stable across restarts
-
-5. UI STARTUP (OPERATOR VISIBILITY)
---------------------------------
-
-A continuous terminal UI loop is started
-
-The UI shows:
-
- - Local satellite identity
-
- - Known satellites and nodes
-
- - Repair queue state
-
- - Notifications and system status
-
-This UI is authoritative:
-
- - It reflects internal state directly
-
- - It is not cosmetic or optional
-
-6. BACKGROUND MAINTENANCE TASKS
--------------------------------
-
-A synchronization loop starts:
-
- - Periodically fetches signed satellite lists
-
- - Verifies signatures against trusted keys
-
- - Updates trusted satellite state
-
-These tasks run continuously in parallel with the UI
-
-7. NETWORK LISTENING
---------------------
-
-A TCP server is started
-
-The server accepts inbound connections
-
-Message handling is intentionally minimal or stubbed
-
-The listener exists to anchor the satellite in the network
-
-8. STEADY STATE
----------------
-
-The process runs indefinitely
-
-UI refreshes continuously
-
-Background tasks execute on schedule
-
-Network connections may be accepted
-
-Shutdown is manual
+================================================================================
+END OF BOOT SEQUENCE AND RUNTIME DESCRIPTION
+================================================================================
 
 
 CORE ARCHITECTURE RULES:
