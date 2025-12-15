@@ -2,11 +2,12 @@
     "data": {
         "satellites": [
             {
-                "fingerprint": "c1:6d:00:40:d8:f8:e2:22:b5:a6:69:c5:ef:10:f7:9e:d0:67:fa:40",
+                "id": "localhost",
+                "fingerprint": "QPNZ8dUCgc81cZX2yBp0rVsZSKm4FSw43Ax0NL5OdH4=",
                 "hostname": "192.168.0.163",
                 "port": 8888
             }
         ]
     },
-    "signature": "fhnZK0tbOyE/t/oiXzIkLofaqW+Vcsq455SQnbkDrSFAUn01LdjW6U46oSfIVu8zOUcsdD0Zy/cXrBNhDRKsSLatNNJaJ5Mj5CY7g6W+vByPgUhxhWFeLGE+TuJUgPFEVqGUsYIGGpgb3S/k7ujUEWBkUmuxZUIomynu8fHCp3QpwNxb2rVPPAF8rkC4F6DJb47FpSE2K1BZbD5FyPGcIfFu0APCf+O2zF8qgyM4Cs9wlA5W3K/S+shaYalfLGFmQOI3AGehENmbBh5msyAjuaOYy8RBVF3eBJFeh3sMt2Ql3FJlWO0PD2qRh6LcQ8xhAhv0LdDdvE6JRcZbogFJlQ=="
+    "signature": "Qr1E1qMZWCclYB876tH2yYj57Hh9XrTvVT6GlozFKoCc28c05uE7siLKVf3dJ+hg37TNH9fpotCR4iEg/QX6fGea9YeH1lujM2f4iwPCIDt9hbL2oyC1FDxMqy/bxx10zpShvFLvvGlK4CaB6IHOsQzG8Uh9SLEKyjYn8W5OJ4zkLjx4GcVmNm4fG8keJ8/qbtGaLDxH7gyLH9G5/O6aEL5SVR9f746zR8lVZs/WzpF5FglzRoTdpVI+TyXlU87kyz2eyQLPE8oDv9S2QvOjK01OmmjifVD2X46irtYLW5az8QLsA/v0ilo8T7h2kOWkZtUJffnxH/HCcjiUgr/dbw=="
 }
