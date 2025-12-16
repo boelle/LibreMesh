@@ -1,4 +1,4 @@
-"""
+"""TESTING
 ===============================================================================
 PROJECT: LibreMesh Satellite (Control Plane)
 VERSION: 2025.12.15 (GitHub Truth & Security Polished)
