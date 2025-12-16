@@ -196,9 +196,15 @@ LIST_JSON_URL    = "https://raw.githubusercontent.com/boelle/LibreMesh/refs/head
 SYNC_INTERVAL = 300 # Pull list.json every 5 minutes
 
 # Global State
-NOTIFICATION_LOG = deque(maxlen=10)
+NOTIFICATION_LOG = deque(maxlen=10) # NOTIFICATION_LOG is a capped deque (maxlen=10) to retain recent events for UI display, complementing UI_NOTIFICATIONS queue.
+
 NODES = {}               # Tracks remote storage nodes
-REMOTE_SATELLITES = {}   # Tracks other online satellites
+                         # NODES holds connected storage nodes with last-seen timestamps. This allows the UI and repair queue to reference node availability.
+                         
+REMOTE_SATELLITES = {}   # Tracks other online satellites detected during node sync rounds for internal awareness
+                         # REMOTE_SATELLITES tracks other online satellites detected during node sync rounds.
+                         # Used for internal awareness and optional future peer-to-peer replication.
+
 REPAIR_QUEUE = asyncio.Queue()
 SATELLITE_ID = None
 TLS_FINGERPRINT = None
@@ -858,7 +864,7 @@ async def main():
     asyncio.create_task(sync_nodes_with_peers())
     asyncio.create_task(announce_to_origin())
 
-    # Start TCP server (placeholder) to accept connections
+    # Start TCP server to accept incoming satellite → origin registration and status sync. Handles updates to TRUSTED_SATELLITES, node awareness, and repair queue information.
     server = await asyncio.start_server(handle_node_sync, LISTEN_HOST, LISTEN_PORT)
     async with server: await server.serve_forever()
 
