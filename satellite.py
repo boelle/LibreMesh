@@ -612,7 +612,7 @@ async def announce_to_origin():
         return
 
     try:
-        reader, writer = await asyncio.open_connection(ORIGIN_HOST, LISTEN_PORT)
+        reader, writer = await asyncio.open_connection(ORIGIN_HOST, ORIGIN_PORT)
 
         payload = {
             "id": SATELLITE_ID,
@@ -776,24 +776,7 @@ async def main():
 
     if IS_ORIGIN:
         sign_and_save_satellite_list()
-    
-    # Follower reports itself to origin
-    if not IS_ORIGIN:
-        try:
-            reader, writer = await asyncio.open_connection(ORIGIN_HOST, LISTEN_PORT)
-            info = {
-                "sat_id": SATELLITE_ID,
-                "fingerprint": TLS_FINGERPRINT,
-                "advertised_ip": ADVERTISED_IP,
-                "port": LISTEN_PORT
-            }
-            writer.write(json.dumps(info).encode('utf-8'))
-            await writer.drain()
-            writer.close()
-            await writer.wait_closed()
-        except Exception as e:
-            print(f"[SYNC TO ORIGIN FAILED] {e}")
-    
+
     # Launch UI and registry sync in background
     asyncio.create_task(draw_ui())
     asyncio.create_task(sync_registry_from_github())
