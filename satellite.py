@@ -224,60 +224,63 @@ LIST_UPDATED_PENDING_SAVE = False
 # --- Core Logic ---
 def get_local_ip():
     """
-    STEP 4: IDENTITY ESTABLISHMENT (used to configure ADVERTISED_IP)
+    Determine the IP address this satellite will advertise to peers and origin.
 
-    Returns the local IP address of the satellite for network advertisement.
+    Purpose:
+    - Provides the network address that this satellite announces as its
+      reachable endpoint during identity establishment and registry updates.
+    - This value is used for *advertisement only*, not for socket binding.
 
-    Purpose in boot sequence:
-    - After identity is established (TLS certificate loaded),
-      the satellite needs to know its IP to advertise itself in the network.
-    - This IP is used when adding the satellite to TRUSTED_SATELLITES
-      and for display in the terminal UI.
+    Behavior:
+    - If ADVERTISED_IP_CONFIG is explicitly set by the operator, that value
+      is always returned and treated as authoritative.
+    - Otherwise, falls back to resolving the local hostname via the OS
+      (`socket.gethostbyname(socket.gethostname())`).
 
-    How it works:
-    1. Checks if a configured IP (ADVERTISED_IP_CONFIG) exists:
-       - If set, returns this configured value.
-    2. Otherwise, falls back to the system hostname resolution using
-       socket.gethostbyname(socket.gethostname()).
-    3. Does not modify any global state; purely a read-only helper.
+    Design Notes:
+    - This function does NOT perform network discovery, interface probing,
+      NAT traversal, or reachability validation.
+    - The fallback hostname resolution may return a loopback or non-routable
+      address depending on system configuration.
+    - Explicit configuration is strongly recommended for multi-node setups,
+      NAT environments, and testing scenarios.
 
-    Notes:
-    - Provides a simple and reliable way to determine a local IP
-      for network registration.
-    - This function is called during STEP 4 (identity establishment)
-      before UI or background tasks are started.
+    Operational Context:
+    - Called during startup to establish satellite identity.
+    - Does not modify global state.
+    - Kept intentionally simple to avoid boot-time network complexity.
     """
     return ADVERTISED_IP_CONFIG if ADVERTISED_IP_CONFIG else socket.gethostbyname(socket.gethostname())
 
 async def fetch_github_file(url, local_path, force=False):
     """
-    STEP 3: KEY MATERIAL AND TRUST SETUP (for non-origin satellites)
+    Retrieve a file from a remote GitHub URL and store it locally.
 
-    Generic helper to fetch files from GitHub and save them locally.
-    Used to obtain:
-      - origin_pubkey.pem for trust verification (non-origin satellites)
-      - list.json for the trusted-satellites registry
+    Purpose:
+    - Used to bootstrap trust and configuration artifacts that are centrally
+      published (e.g. origin public key, trusted satellite registry).
+    - Enables satellites to synchronize critical static files without
+      peer-to-peer coordination.
 
-    Purpose in boot sequence:
-    - Ensures non-origin satellites can retrieve trusted files needed for
-      verification and establishing trust.
-    - Origin satellites usually skip this step.
-    - Only downloads files once unless `force=True`.
+    Behavior:
+    - If the target file already exists locally and `force` is False,
+      the download is skipped.
+    - If `force` is True, the file is always fetched and overwritten.
+    - Performs a simple HTTP GET request to the provided URL.
+    - On success, writes the response body directly to `local_path`.
 
-    How it works:
-    1. Checks if the file already exists locally:
-       - If it exists and `force=False`, skips download.
-       - Otherwise, proceeds to fetch.
-    2. Uses `asyncio.get_event_loop()` with `run_in_executor` to perform
-       a synchronous `urllib.request.urlopen()` in a non-blocking manner.
-    3. Reads the response content and writes it to `local_path`.
-    4. Returns True if successful, False if an exception occurs.
-    5. Returns True immediately if file already exists and `force=False`.
+    Error Handling:
+    - Network or HTTP errors are caught and reported via UI_NOTIFICATIONS.
+    - Failure does not raise, allowing boot to continue with existing state.
 
-    Notes:
-    - This function is asynchronous; must be awaited.
-    - Does not modify global state other than writing the local file.
-    - Fits into STEP 3: Key recovery / trust setup during boot.
+    Design Notes:
+    - No validation of file contents or cryptographic verification occurs here.
+    - Trust verification (signatures, fingerprints) is handled elsewhere.
+    - This function is intentionally minimal to keep bootstrapping resilient.
+
+    Operational Context:
+    - Called during startup before registry loading.
+    - Asynchronous to avoid blocking the event loop during network I/O.
     """
     if not os.path.exists(local_path) or force:
         try:
@@ -295,11 +298,33 @@ async def fetch_github_file(url, local_path, force=False):
 
 async def sync_nodes_with_peers():
     """
-    Hybrid NODES synchronization (Step 5 supplement):
-    - Periodically sends your NODES dict to all trusted satellites.
-    - Receives their NODES dict and merges into local NODES.
-    - Ensures each satellite has a more complete view of the network.
-    - Origin remains authoritative for trust; this only syncs topology info.
+    STEP 6: PEER-TO-PEER NODE SYNC
+
+    Continuously shares this satellite's known storage nodes with other online satellites.
+
+    Behavior:
+    - Iterates over all entries in REMOTE_SATELLITES.
+    - For each satellite:
+        - Opens a TCP connection to the satellite's hostname and port.
+        - Sends a JSON payload containing:
+            - "id": this satellite's SATELLITE_ID
+            - "nodes": this satellite's local NODES dictionary
+        - Flushes the payload and closes the connection.
+    - If an exception occurs during the push, logs it to UI_NOTIFICATIONS.
+    - Waits NODE_SYNC_INTERVAL seconds before repeating.
+
+    Notes:
+    - Runs indefinitely in a non-blocking async loop.
+    - Does not modify local NODES, only pushes it to peers.
+    - Supports eventual consistency in node awareness across satellites.
+    - Exceptions are caught per satellite to ensure a single failure does not stop the loop.
+
+    Uses global state:
+    - SATELLITE_ID
+    - NODES
+    - REMOTE_SATELLITES
+    - NODE_SYNC_INTERVAL
+    - UI_NOTIFICATIONS
     """
     while True:
         for sat_id, sat_info in TRUSTED_SATELLITES.items():
@@ -335,35 +360,31 @@ async def sync_nodes_with_peers():
 
 async def sync_registry_from_github():
     """
-    BACKGROUND TASK: GITHUB TRUSTED REGISTRY SYNC
+    STEP 7: PERIODIC TRUSTED REGISTRY SYNC FROM GITHUB
 
-    Periodically pulls the signed `list.json` from GitHub and updates
-    the local trusted satellite registry (`TRUSTED_SATELLITES`) after
-    verifying its signature. This ensures that all satellites — follower
-    or origin — maintain a consistent, cryptographically verified view
-    of the authoritative registry published on GitHub.
-
-    Purpose:
-    - Keeps this node’s view of trusted satellites up to date with
-      the origin-signed registry on GitHub.
-    - Runs asynchronously in parallel with the terminal UI and other
-      background tasks.
-    - Verifies authenticity of registry before updating in memory.
+    Continuously fetches the central trusted satellites list (list.json) from the
+    configured GitHub repository and updates local TRUSTED_SATELLITES.
 
     Behavior:
-    1. Runs an infinite loop (`while True`) as a persistent background task.
-    2. Calls `fetch_github_file()` with `force=True` to retrieve the
-       latest copy of `list.json` from the GitHub repository.
-    3. Calls `load_trusted_satellites()`, which verifies the signature
-       and updates `TRUSTED_SATELLITES` if verification succeeds.
-    4. Sleeps for `SYNC_INTERVAL` seconds before repeating to control
-       the update frequency.
-
+    - Runs in an infinite asynchronous loop.
+    - Every SYNC_INTERVAL seconds:
+        - Downloads LIST_JSON_URL to LIST_JSON_PATH using fetch_github_file().
+        - Loads the JSON content and updates TRUSTED_SATELLITES in-memory.
+        - Adds or updates entries as necessary, without removing existing satellites
+          unless explicitly changed in the downloaded list.
+        - Any errors in download or parsing are logged to UI_NOTIFICATIONS.
+    
     Notes:
-    - This task does *not* modify the origin-generated registry; it only
-      updates local state.
-    - Should be started with `asyncio.create_task()`.
-    - Does not block other tasks or the main event loop.
+    - Only intended for non-origin satellites to fetch the canonical registry.
+    - Keeps local in-memory registry consistent with GitHub source.
+    - Exceptions in fetching or parsing do not halt the loop.
+    
+    Uses global state:
+    - LIST_JSON_URL
+    - LIST_JSON_PATH
+    - TRUSTED_SATELLITES
+    - UI_NOTIFICATIONS
+    - SYNC_INTERVAL
     """
     
     while True:
@@ -376,30 +397,30 @@ async def sync_registry_from_github():
 
 def add_or_update_trusted_registry(sat_id, fingerprint, hostname, port):
     """
-    Adds or updates a satellite entry in the local TRUSTED_SATELLITES registry.
+    STEP 3b: Add or update a satellite entry in the in-memory trusted registry.
 
     Purpose:
-    - Maintain an up-to-date in-memory view of trusted satellites.
-    - Detect and record changes in fingerprint, hostname, or port.
-    - Ensure the registry is consistent with the authoritative origin view.
+    - Maintains a dictionary of trusted satellites for identity verification.
+    - Ensures the satellite registry reflects current fingerprint, hostname/IP, and listening port.
+    - Used by both origin and non-origin nodes for consistency and eventual GitHub distribution.
 
     Parameters:
     - sat_id (str): Unique identifier of the satellite.
-    - fingerprint (str): TLS fingerprint of the satellite for cryptographic verification.
-    - hostname (str): Advertised IP or hostname of the satellite.
+    - fingerprint (str): TLS fingerprint of the satellite's certificate.
+    - hostname (str): Advertised hostname or IP of the satellite.
     - port (int): Listening port of the satellite.
 
     Behavior:
-    1. Checks if the satellite ID already exists in TRUSTED_SATELLITES.
-    2. If it does not exist, adds a new entry.
-    3. If it exists, compares fingerprint, hostname, and port:
-       - Updates the entry if any of these fields differ.
-    4. Does not persist changes to disk or GitHub — use `sign_and_save_satellite_list()` for persistence.
-    5. Optionally, UI notifications may be triggered elsewhere if new or updated satellites are registered.
+    - If the satellite already exists in TRUSTED_SATELLITES:
+        - Updates fingerprint, hostname, port if changed.
+    - If it does not exist:
+        - Creates a new entry.
+    - Does NOT perform any network I/O; strictly updates in-memory state.
+    - Changes are later persisted to GitHub via `sign_and_save_satellite_list()` by the origin.
 
     Notes:
-    - Purely modifies local in-memory state.
-    - Typically called during boot sequence or when syncing with origin/followers.
+    - Modifies the global TRUSTED_SATELLITES dictionary.
+    - Keeps the system aware of all known satellites for verification and replication purposes.
     """
     global LIST_UPDATED_PENDING_SAVE
     if not IS_ORIGIN: return
@@ -603,9 +624,18 @@ async def handle_node_sync(reader, writer):
         await writer.wait_closed()
         
 async def announce_to_origin():
-    """
-    Followers announce themselves to origin
-    """
+"""
+STEP 2: Announce satellite to origin
+
+- Non-origin satellites notify the origin of their presence after a short delay (3s).
+- Payload includes:
+    - 'id': SATELLITE_ID
+    - 'fingerprint': TLS_FINGERPRINT
+    - 'ip': ADVERTISED_IP
+    - 'port': LISTEN_PORT
+- Origin may register or update the satellite in TRUSTED_SATELLITES.
+- Any connection failure results in a UI notification.
+"""
     await asyncio.sleep(3)  # allow boot to finish
 
     if IS_ORIGIN:
@@ -630,6 +660,19 @@ async def announce_to_origin():
         UI_NOTIFICATIONS.put_nowait("Failed to reach origin")
 
 async def register_with_origin():
+    """
+    STEP 2: Register satellite with origin
+
+    - Non-origin satellites announce themselves to the origin node during boot.
+    - Payload sent:
+    - 'id': SATELLITE_ID
+    - 'fingerprint': TLS_FINGERPRINT
+    - 'ip': ADVERTISED_IP
+    - 'port': LISTEN_PORT
+    - On success: pushes "Registered with origin" notification.
+    - On failure: pushes a notification with the exception details.
+    - Fully asynchronous; does not block other startup tasks.
+    """
     if IS_ORIGIN:
         return
 
@@ -681,6 +724,8 @@ async def draw_ui():
     - Non-blocking; runs in parallel with TCP server, registry sync, and node sync loops.
     - Fully asynchronous and safe to run on both origin and follower satellites.
     - Complements STEP 5 in boot sequence remarks.
+    - Notification history retained in NOTIFICATION_LOG (deque maxlen=10).
+    - Node uptime currently shown as N/A; can be updated once node heartbeat is implemented.
     """
     while True:
         os.system('clear' if os.name == 'posix' else 'cls')
@@ -756,6 +801,9 @@ async def main():
     - Fully matches remark section steps 1–5.
     - Ensures the satellite is ready for operation with identity,
       trust verification, UI, and networking.
+    - Follower push to origin temporarily duplicates 'announce_to_origin()'; can be consolidated.
+    - Background tasks are non-blocking due to asyncio.create_task().
+    - TCP server blocks indefinitely; ensures continuous node sync handling.
     """
     global ORIGIN_PUBKEY_PEM
     # Standard satellites pull pubkey ONCE from GitHub
@@ -815,6 +863,26 @@ async def main():
     - Payload structure is expected by the origin's handle_node_sync() function.
     """
 async def push_status_to_origin():
+    """
+    STEP 2–4: PUSH STATUS TO ORIGIN
+
+    Followers periodically send their current state to the origin:
+    - Identity (SATELLITE_ID)
+    - TLS fingerprint
+    - Advertised IP and listening port
+    - Known nodes (NODES)
+    - Current repair queue
+
+    Behavior:
+    - Origin nodes do not push to themselves.
+    - Establishes TCP connection to ORIGIN_HOST:ORIGIN_PORT.
+    - Sends JSON-encoded payload.
+    - Catches and logs any connection or write errors to UI_NOTIFICATIONS.
+    - Ensures writer is properly closed to release resources.
+
+    Used by:
+    - `node_sync_loop()` for periodic reporting.
+    """
     if IS_ORIGIN:
         return  # Origin does not push to itself
 
@@ -856,6 +924,21 @@ async def push_status_to_origin():
     - Uses global variables: SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP, LISTEN_PORT, NODES, REPAIR_QUEUE.
     """
 async def node_sync_loop():
+    """
+    STEP 2–4: NODE SYNC LOOP
+
+    Continuously pushes the satellite's current status to the origin at regular intervals.
+
+    Behavior:
+    - Runs indefinitely in a background asyncio task.
+    - Calls `push_status_to_origin()` each cycle.
+    - Sleeps for `NODE_SYNC_INTERVAL` seconds between pushes.
+    - Origin nodes skip pushing themselves (enforced in `push_status_to_origin()`).
+
+    Purpose:
+    - Keeps the origin aware of satellite nodes, their advertised IPs, known nodes, and repair queues.
+    - Supports monitoring, coordination, and repair logic.
+    """
     while True:
         await push_status_to_origin()
         await asyncio.sleep(NODE_SYNC_INTERVAL)
