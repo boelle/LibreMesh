@@ -224,7 +224,7 @@ LIST_UPDATED_PENDING_SAVE = False
 # --- Core Logic ---
 def get_local_ip():
     """
-    Determine the IP address this satellite will advertise to peers and origin.
+    STEP 4: Determine the IP address this satellite will advertise to peers and origin.
 
     Purpose:
     - Provides the network address that this satellite announces as its
@@ -254,7 +254,7 @@ def get_local_ip():
 
 async def fetch_github_file(url, local_path, force=False):
     """
-    Downloads a file from a GitHub URL and saves it locally.
+    Step 3a: Downloads a file from a GitHub URL and saves it locally.
 
     Purpose:
     - Provides a simple mechanism to fetch the origin public key or 
@@ -304,7 +304,7 @@ async def fetch_github_file(url, local_path, force=False):
 
 async def sync_nodes_with_peers():
     """
-    Periodically synchronizes node information with peer satellites.
+    Step 7: Periodically synchronizes node information with peer satellites.
 
     Purpose:
     - Keeps each satellite aware of other online satellites and storage nodes
@@ -368,7 +368,7 @@ async def sync_nodes_with_peers():
 
 async def sync_registry_from_github():
     """
-    Periodically fetches the trusted satellites registry from GitHub.
+    Step 3a: Periodically fetches the trusted satellites registry from GitHub.
 
     Purpose:
     - Keeps the local trusted satellites registry up to date with the
@@ -468,7 +468,7 @@ Notes:
 
 def load_trusted_satellites():
 """
-Load and verify the trusted satellites registry from disk.
+Step 3a/3b: Load and verify the trusted satellites registry from disk.
 
 Purpose:
 - Reads the signed registry file at LIST_JSON_PATH.
@@ -519,7 +519,7 @@ Notes:
 
 def sign_and_save_satellite_list():
 """
-Sign and persist the trusted satellite registry for distribution.
+Step 3b: Sign and persist the trusted satellite registry for distribution.
 
 Purpose:
 - Produces the authoritative, signed registry of trusted satellites.
@@ -564,7 +564,7 @@ Security Notes:
 
 def generate_keys_and_certs():
 """
-Generate or load cryptographic identity material for this satellite.
+Step 3a: Generate or load cryptographic identity material for this satellite.
 
 Purpose:
 - Establishes the cryptographic identity of the satellite node.
@@ -638,7 +638,7 @@ Design Notes:
 
 async def handle_node_sync(reader, writer):
 """
-Handle inbound satellite → origin synchronization connections.
+Step 6: Handle inbound satellite → origin synchronization connections.
 
 Purpose:
 - Acts as the server-side entry point for satellites reporting their
@@ -884,48 +884,98 @@ async def main():
     """
     STEP 1–5: BOOT SEQUENCE ORCHESTRATION
 
-    Entry point for the satellite node. Performs initialization,
-    role determination, key/certificate setup, trusted registry handling,
-    and starts UI & background tasks.
+    Entry point for the satellite node. This function performs full
+    initialization, role determination, identity setup, trust loading,
+    background task scheduling, and network listener startup.
 
-    Purpose in boot sequence:
-    - STEP 1: Initialization (implicit via global state)
-    - STEP 2: Role Definition (FORCE_ORIGIN determines origin/follower)
-    - STEP 3: Key Recovery & Trust Setup
-        - Fetch origin_pubkey.pem for non-origin satellites
-        - Generate local keys and certificates
-        - Load or verify trusted satellites registry
-        - Add origin satellite to registry if applicable
-    - STEP 4: Identity Establishment
-        - SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP set
-    - STEP 5: UI & Background Tasks
-        - Launch terminal UI
-        - Launch periodic registry sync
-        - Start TCP listener
+    This function is responsible for orchestrating the complete satellite
+    lifecycle up to steady-state operation.
 
-    How it works:
-    1. If this satellite is NOT origin (FORCE_ORIGIN=False):
-       - Fetch origin public key from GitHub once via `fetch_github_file()`.
-    2. Generate keys and certificates locally (`generate_keys_and_certs()`).
-    3. Load and verify the trusted satellites registry (`load_trusted_satellites()`).
-    4. Origin satellites automatically add themselves to the registry
-       for GitHub distribution (`add_or_update_trusted_registry()`).
-    5. Start asynchronous background tasks:
-       - `draw_ui()`: terminal UI
-       - `sync_registry_from_github()`: periodic trusted registry updates
-    6. Start TCP server to listen for connections (currently placeholder lambda).
-       - Runs indefinitely using `serve_forever()`.
+    -----------------------------------------------------------------------
+    BOOT SEQUENCE RESPONSIBILITIES
+    -----------------------------------------------------------------------
 
-    Notes:
-    - Orchestrates **entire satellite boot sequence**.
-    - Updates and relies on global state: ORIGIN_PUBKEY_PEM, SATELLITE_ID,
-      TLS_FINGERPRINT, ADVERTISED_IP, TRUSTED_SATELLITES, etc.
-    - Fully matches remark section steps 1–5.
-    - Ensures the satellite is ready for operation with identity,
-      trust verification, UI, and networking.
-    - Follower push to origin temporarily duplicates 'announce_to_origin()'; can be consolidated.
-    - Background tasks are non-blocking due to asyncio.create_task().
-    - TCP server blocks indefinitely; ensures continuous node sync handling.
+    STEP 1: Initialization
+    - Relies on module-level global state initialization (constants, queues,
+      registries).
+    - No network or cryptographic operations occur yet.
+
+    STEP 2: Role Definition
+    - Determines whether this node acts as ORIGIN or FOLLOWER based on
+      FORCE_ORIGIN.
+    - Role selection affects:
+        - Whether signing keys are generated
+        - Whether registry updates are allowed
+        - Whether outbound registration occurs
+
+    STEP 3: Key Recovery & Trust Setup
+    - For non-origin satellites:
+        - Fetches the origin public key once from GitHub via
+          `fetch_github_file()`.
+    - Generates or loads:
+        - TLS private key
+        - TLS certificate
+        - Origin signing keys (origin only)
+    - Loads and verifies the trusted satellite registry from disk
+      (`load_trusted_satellites()`).
+    - Origin satellites automatically insert themselves into the registry
+      for later GitHub distribution.
+
+    STEP 4: Identity Establishment
+    - Establishes immutable runtime identity values:
+        - SATELLITE_ID
+        - TLS_FINGERPRINT
+        - ADVERTISED_IP
+    - Identity must be fully established before any network communication
+      or UI rendering begins.
+
+    STEP 5: UI & Background Tasks
+    - Launches long-running asynchronous background tasks:
+        - `draw_ui()` — terminal status interface
+        - `sync_registry_from_github()` — periodic registry refresh
+        - `sync_nodes_with_peers()` — peer satellite awareness
+        - `announce_to_origin()` — one-time boot announcement (followers)
+        - `node_sync_loop()` — periodic status push to origin (followers)
+    - Background tasks are non-blocking and run concurrently.
+
+    -----------------------------------------------------------------------
+    NETWORK LISTENER
+    -----------------------------------------------------------------------
+
+    - Starts an asyncio TCP server bound to LISTEN_HOST:LISTEN_PORT.
+    - Uses `handle_node_sync()` as the connection handler.
+    - Accepts inbound satellite → origin synchronization messages.
+    - Runs indefinitely via `serve_forever()` to keep the control plane alive.
+
+    -----------------------------------------------------------------------
+    STATUS REPORTING CONTEXT
+    -----------------------------------------------------------------------
+
+    - Although this function does not directly push status to the origin,
+      it is responsible for scheduling the background mechanisms that do:
+        - `announce_to_origin()` (single delayed announcement)
+        - `node_sync_loop()` → `push_status_to_origin()` (periodic updates)
+
+    - These status updates allow the origin to maintain an up-to-date view
+      of:
+        - Satellite identity and fingerprint
+        - Advertised IP and listening port
+        - Known nodes
+        - Repair queue state
+
+    -----------------------------------------------------------------------
+    DESIGN NOTES
+    -----------------------------------------------------------------------
+
+    - This function is the **only valid entry point** for the satellite.
+    - It must run exactly once per process lifetime.
+    - All global state mutations are intentional and ordered.
+    - Background tasks are explicitly created to avoid blocking the TCP server.
+    - Follower registration currently overlaps with `announce_to_origin()`;
+      consolidation is possible but deferred intentionally for clarity.
+
+    This function fully implements and enforces the boot sequence described
+    in the top-level module documentation.
     """
     global ORIGIN_PUBKEY_PEM
     # Standard satellites pull pubkey ONCE from GitHub
@@ -965,52 +1015,81 @@ async def main():
     # Keep the TCP server running indefinitely
     async with server: await server.serve_forever()
 
-    """
-    Sends this satellite's status to the origin node.
-
-    Purpose:
-    - Enables the origin to maintain an up-to-date view of all followers.
-    - Provides information for node awareness and repair coordination.
-
-    Behavior:
-    1. If this node is the origin (IS_ORIGIN=True), the function returns immediately.
-    2. Constructs a payload containing:
-       - Satellite ID (SATELLITE_ID)
-       - TLS fingerprint (TLS_FINGERPRINT)
-       - Advertised IP (ADVERTISED_IP)
-       - Listening port (LISTEN_PORT)
-       - Known storage nodes (NODES)
-       - Current repair queue (REPAIR_QUEUE)
-    3. Opens a TCP connection to the origin (ORIGIN_HOST:ORIGIN_PORT).
-    4. Sends the payload as JSON.
-    5. Closes the connection gracefully.
-    6. Any errors are captured and a message is added to UI_NOTIFICATIONS.
-
-    Notes:
-    - Runs asynchronously and can be scheduled periodically in a loop (e.g., node_sync_loop).
-    - Assumes ORIGIN_HOST and ORIGIN_PORT are reachable from this satellite.
-    - Payload structure is expected by the origin's handle_node_sync() function.
-    """
 async def push_status_to_origin():
     """
     STEP 2–4: PUSH STATUS TO ORIGIN
 
-    Followers periodically send their current state to the origin:
-    - Identity (SATELLITE_ID)
-    - TLS fingerprint
-    - Advertised IP and listening port
-    - Known nodes (NODES)
-    - Current repair queue
+    Sends this satellite's current operational status to the origin node.
+    This function is the fundamental reporting mechanism that allows the
+    origin to maintain an up-to-date, authoritative view of all follower
+    satellites in the mesh.
 
-    Behavior:
-    - Origin nodes do not push to themselves.
-    - Establishes TCP connection to ORIGIN_HOST:ORIGIN_PORT.
-    - Sends JSON-encoded payload.
-    - Catches and logs any connection or write errors to UI_NOTIFICATIONS.
-    - Ensures writer is properly closed to release resources.
+    -----------------------------------------------------------------------
+    PURPOSE
+    -----------------------------------------------------------------------
 
-    Used by:
-    - `node_sync_loop()` for periodic reporting.
+    - Keeps the origin informed of this satellite’s identity and health.
+    - Enables centralized awareness for monitoring, coordination, and
+      future repair or orchestration logic.
+    - Provides the origin with visibility into:
+        - Connected storage or peer nodes
+        - Current repair queue state
+
+    -----------------------------------------------------------------------
+    PAYLOAD CONTENT
+    -----------------------------------------------------------------------
+
+    The JSON payload sent to the origin includes:
+
+    - id:
+        Logical satellite identifier (SATELLITE_ID)
+    - fingerprint:
+        TLS certificate fingerprint used for trust verification
+    - ip:
+        Advertised network address (ADVERTISED_IP)
+    - port:
+        TCP listening port (LISTEN_PORT)
+    - nodes:
+        Known storage / peer nodes with last-seen timestamps (NODES)
+    - repair_queue:
+        Snapshot of the current repair queue state
+
+    -----------------------------------------------------------------------
+    BEHAVIOR
+    -----------------------------------------------------------------------
+
+    - If this satellite is the origin (IS_ORIGIN=True), the function
+      returns immediately and performs no action.
+    - Establishes a TCP connection to ORIGIN_HOST:ORIGIN_PORT.
+    - Sends the JSON-encoded status payload.
+    - Flushes the write buffer and closes the connection cleanly.
+    - Any connection, write, or serialization errors are caught and
+      logged via UI_NOTIFICATIONS without raising exceptions.
+
+    -----------------------------------------------------------------------
+    OPERATIONAL CONTEXT
+    -----------------------------------------------------------------------
+
+    - This function performs a **single status push**.
+    - It is intended to be called repeatedly by `node_sync_loop()`,
+      which schedules periodic reporting based on NODE_SYNC_INTERVAL.
+    - It is also conceptually related to the one-time boot announcement
+      performed by `announce_to_origin()`, but differs in that it includes
+      dynamic runtime state.
+
+    -----------------------------------------------------------------------
+    DESIGN NOTES
+    -----------------------------------------------------------------------
+
+    - Runs fully asynchronously and never blocks the event loop.
+    - Uses global state only for read access (identity, nodes, queues).
+    - Always closes network resources to prevent file descriptor leaks.
+    - Payload format is expected by the origin’s `handle_node_sync()` handler.
+    - This function does not perform registry mutations directly; it only
+      reports state to the origin.
+
+    This function is a core component of the satellite → origin control
+    plane synchronization mechanism.
     """
    
     if IS_ORIGIN: # Origin never reports status to itself; avoids loopback noise and recursion
@@ -1039,24 +1118,7 @@ async def push_status_to_origin():
         if 'writer' in locals():
             writer.close()
             await writer.wait_closed()
-    """
-    Periodically pushes this satellite's status to the origin.
 
-    Purpose:
-    - Keeps the origin updated with this node's current state.
-    - Supports centralized awareness of connected satellites for coordination and repair.
-
-    Behavior:
-    1. Runs an infinite loop asynchronously.
-    2. Calls `push_status_to_origin()` once per iteration.
-    3. Waits for NODE_SYNC_INTERVAL seconds between iterations.
-    4. Continues indefinitely in the background.
-
-    Notes:
-    - Only relevant for non-origin satellites; origins do not push status to themselves.
-    - Typically started as a background task using `asyncio.create_task(node_sync_loop())`.
-    - Uses global variables: SATELLITE_ID, TLS_FINGERPRINT, ADVERTISED_IP, LISTEN_PORT, NODES, REPAIR_QUEUE.
-    """
 async def node_sync_loop():
     """
     STEP 2–4: NODE SYNC LOOP
