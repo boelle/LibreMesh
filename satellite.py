@@ -254,39 +254,42 @@ def get_local_ip():
 
 async def fetch_github_file(url, local_path, force=False):
     """
-    Step 3a: Downloads a file from a GitHub URL and saves it locally.
+    STEP 3a: Fetch and cache a file from a remote GitHub URL.
 
     Purpose:
-    - Provides a simple mechanism to fetch the origin public key or 
-      trusted satellites list from GitHub.
-    - Ensures that each satellite can retrieve authoritative files
-      from a centralized source for secure bootstrapping.
+    - Retrieves a file (typically JSON registry data) from a GitHub-hosted
+      raw content URL.
+    - Stores the file locally for use by other registry and trust-management
+      functions.
+    - Avoids unnecessary network access by using a local cached copy unless
+      explicitly overridden.
 
-    Parameters:
-    - url (str): The full HTTPS URL pointing to the file on GitHub.
-    - local_path (str): The path on local filesystem where the file should be saved.
-    - force (bool, default=False): If True, the file is always downloaded even if it exists locally.
+    Behavior:
+    - If `force` is False and `local_path` already exists, the function
+      returns immediately without performing any network request.
+    - If `force` is True, or the file does not exist locally, the function
+      downloads the file from the given URL and overwrites any existing file.
+    - The HTTP download is executed inside a thread executor to prevent
+      blocking the asyncio event loop.
 
-    High-level behavior:
-    - Checks if the local file exists. If `force` is False and the file exists, it skips download.
-    - Performs an asynchronous HTTP GET request to fetch the file contents.
-    - Writes the fetched content to `local_path` in a safe manner.
-    - Handles network errors gracefully without raising unhandled exceptions.
+    Error Handling:
+    - Any exception during download, file I/O, or decoding is caught.
+    - On failure, the function returns False and does not raise.
+    - On success, the function returns True.
 
-    Design constraints:
-    - Assumes the GitHub URL is public and accessible; no authentication handled.
-    - File overwrite occurs only if `force` is True or local file is missing.
-    - The function is non-blocking and can run in parallel with other async tasks.
+    Design Notes:
+    - This function does not validate the contents, format, or schema of the
+      downloaded file.
+    - No cryptographic verification, signature checking, or authenticity
+      validation is performed here.
+    - The function assumes the URL is trusted and reachable.
+    - Network timeouts and HTTP status codes are not explicitly handled
+      beyond the generic exception catch.
 
-    Operational context:
-    - Used during satellite boot (`main()`) for initial retrieval of `origin_pubkey.pem` or `list.json`.
-    - Complements periodic tasks like `sync_registry_from_github()` for ongoing updates.
-    - Errors are logged via `UI_NOTIFICATIONS` queue for operator awareness.
-
-    Notes:
-    - This function does not verify cryptographic signatures or hashes of downloaded content.
-    - Intended for lightweight, reliable file retrieval during startup.
-    - Safe for repeated calls; minimizes unnecessary network traffic if files exist.
+    Operational Context:
+    - Used as a low-level helper by registry synchronization logic.
+    - Safe to call repeatedly.
+    - Does not modify global state beyond writing to `local_path`.
     """
     if not os.path.exists(local_path) or force:
         try:
@@ -304,35 +307,40 @@ async def fetch_github_file(url, local_path, force=False):
 
 async def sync_nodes_with_peers():
     """
-    Step 7: Periodically synchronizes node information with peer satellites.
+    STEP 4–5: Peer-to-peer node state synchronization.
 
     Purpose:
-    - Keeps each satellite aware of other online satellites and storage nodes
-      in the network.
-    - Updates global `REMOTE_SATELLITES` with current peer statuses.
-    - Facilitates future peer-to-peer replication and repair tasks.
+    - Periodically exchanges node state information with known peer satellites.
+    - Supplements origin-based coordination by allowing satellites to
+      directly share awareness of other nodes.
 
-    High-level behavior:
-    - Iterates over known trusted satellites (`TRUSTED_SATELLITES`) excluding self.
-    - Attempts to connect asynchronously to each satellite's listening port.
-    - Requests their current nodes and repair queue status.
-    - Updates local `REMOTE_SATELLITES` dictionary with the received data.
-    - Handles connection failures gracefully, logs issues via `UI_NOTIFICATIONS`.
+    Behavior:
+    - Runs continuously as a background asynchronous task.
+    - Iterates over entries in TRUSTED_SATELLITES.
+    - Skips self entries and origin-specific cases where applicable.
+    - Attempts to open a TCP connection to each peer's advertised host and port.
+    - Sends a JSON-encoded payload describing this satellite's current state.
+    - Receives and processes peer responses when provided.
+    - Updates in-memory node awareness structures based on successful exchanges.
 
-    Operational context:
-    - Runs continuously in an asynchronous loop, sleeping for `NODE_SYNC_INTERVAL` seconds between rounds.
-    - Complements origin-based synchronization (`push_status_to_origin()`), providing peer awareness even if origin is temporarily unreachable.
-    - Assumes a trusted network; no encryption/authentication is handled in this step.
+    Error Handling:
+    - Network errors, connection failures, and malformed responses are caught.
+    - Failures with one peer do not interrupt synchronization with others.
+    - Errors are logged or surfaced via UI notifications where appropriate.
 
-    Design constraints:
-    - Non-blocking: uses asyncio tasks to avoid halting other operations.
-    - Lightweight: does not persist data to disk, only updates in-memory structures.
-    - Resilient to network failures: failed connections do not raise unhandled exceptions.
+    Design Notes:
+    - This function assumes TRUSTED_SATELLITES has already been loaded and
+      validated during startup.
+    - No cryptographic verification or TLS authentication is performed here.
+    - Peer synchronization is opportunistic and best-effort.
+    - This does not replace origin synchronization; it complements it.
 
-    Inline remarks suggestions:
-    - Annotate connection attempt to peer, payload exchange, and update of `REMOTE_SATELLITES`.
-    - Explain retry behavior or lack thereof.
-    - Clarify that `REMOTE_SATELLITES` stores per-satellite nodes and repair queue snapshots.
+    Operational Context:
+    - Started as a background task by `main()`.
+    - Relies on global state including TRUSTED_SATELLITES, SATELLITE_ID,
+      ADVERTISED_IP, LISTEN_PORT, and NODES.
+    - Intended to improve resilience and convergence in multi-satellite
+      deployments.
     """
     while True:
         for sat_id, sat_info in TRUSTED_SATELLITES.items():
@@ -424,35 +432,35 @@ async def sync_registry_from_github():
         await asyncio.sleep(SYNC_INTERVAL)
 
 def add_or_update_trusted_registry(sat_id, fingerprint, hostname, port):
-"""
-STEP 3b: Add or update a satellite entry in the in-memory trusted registry.
+    """
+    STEP 3b: Add or update a satellite entry in the in-memory trusted registry.
 
-Purpose:
-- Maintains a dictionary of trusted satellites for identity verification.
-- Ensures the satellite registry reflects current fingerprint, hostname/IP, and listening port.
-- Notifies the local UI on registry changes.
-- Marks that the registry has pending updates to save.
+    Purpose:
+    - Maintains a dictionary of trusted satellites for identity verification.
+    - Ensures the satellite registry reflects current fingerprint, hostname/IP, and listening port.
+    - Notifies the local UI on registry changes.
+    - Marks that the registry has pending updates to save.
 
-Parameters:
-- sat_id (str): Unique identifier of the satellite.
-- fingerprint (str): TLS fingerprint of the satellite's certificate.
-- hostname (str): Advertised hostname or IP of the satellite.
-- port (int): Listening port of the satellite.
+    Parameters:
+    - sat_id (str): Unique identifier of the satellite.
+    - fingerprint (str): TLS fingerprint of the satellite's certificate.
+    - hostname (str): Advertised hostname or IP of the satellite.
+    - port (int): Listening port of the satellite.
 
-Behavior:
-- If this node is not the origin, returns immediately (only origin updates registry).
-- Constructs a details dictionary with satellite identity and network info.
-- If the satellite is new or its details have changed:
-  - Updates the TRUSTED_SATELLITES dictionary.
-  - Queues a UI notification via `UI_NOTIFICATIONS`.
-  - Flags `LIST_UPDATED_PENDING_SAVE` to true for later persistence.
-- Does NOT perform network I/O or direct file writes.
+    Behavior:
+    - If this node is not the origin, returns immediately (only origin updates registry).
+    - Constructs a details dictionary with satellite identity and network info.
+    - If the satellite is new or its details have changed:
+      - Updates the TRUSTED_SATELLITES dictionary.
+      - Queues a UI notification via `UI_NOTIFICATIONS`.
+      - Flags `LIST_UPDATED_PENDING_SAVE` to true for later persistence.
+    - Does NOT perform network I/O or direct file writes.
 
-Notes:
-- Modifies the global TRUSTED_SATELLITES dictionary.
-- UI notification provides operator feedback on registry changes.
-- LIST_UPDATED_PENDING_SAVE signals that a signed update should be written later.
-"""
+    Notes:
+    - Modifies the global TRUSTED_SATELLITES dictionary.
+    - UI notification provides operator feedback on registry changes.
+    - LIST_UPDATED_PENDING_SAVE signals that a signed update should be written later.
+    """
     global LIST_UPDATED_PENDING_SAVE
     if not IS_ORIGIN: return # Followers do not modify the registry
     new_details = {
@@ -467,35 +475,35 @@ Notes:
         LIST_UPDATED_PENDING_SAVE = True 
 
 def load_trusted_satellites():
-"""
-Step 3a/3b: Load and verify the trusted satellites registry from disk.
+    """
+    Step 3a/3b: Load and verify the trusted satellites registry from disk.
 
-Purpose:
-- Reads the signed registry file at LIST_JSON_PATH.
-- Verifies the registry signature using the origin public key (ORIGIN_PUBKEY_PEM).
-- On successful verification, updates TRUSTED_SATELLITES in memory.
+    Purpose:
+    - Reads the signed registry file at LIST_JSON_PATH.
+    - Verifies the registry signature using the origin public key (ORIGIN_PUBKEY_PEM).
+    - On successful verification, updates TRUSTED_SATELLITES in memory.
 
-Behavior:
-1. If the file at LIST_JSON_PATH does not exist, no action is taken.
-2. Loads the file and parses it as JSON containing:
-   - 'data': registry dictionary
-   - 'signature': base64-encoded signature
-3. If the origin public key is not loaded (ORIGIN_PUBKEY_PEM is None), return early.
-4. Loads the origin public key and attempts to verify the signature over
-   the canonical JSON of the registry data.
-5. On successful verification:
-   - Clears current TRUSTED_SATELLITES.
-   - Populates TRUSTED_SATELLITES with entries from data['satellites'].
-6. On any exception (missing file, parse error, verification failure, etc.):
-   - A UI notification "Registry: Verification Failed." is enqueued.
-   - TRUSTED_SATELLITES remains unchanged.
+    Behavior:
+    1. If the file at LIST_JSON_PATH does not exist, no action is taken.
+    2. Loads the file and parses it as JSON containing:
+       - 'data': registry dictionary
+       - 'signature': base64-encoded signature
+    3. If the origin public key is not loaded (ORIGIN_PUBKEY_PEM is None), return early.
+    4. Loads the origin public key and attempts to verify the signature over
+       the canonical JSON of the registry data.
+    5. On successful verification:
+       - Clears current TRUSTED_SATELLITES.
+       - Populates TRUSTED_SATELLITES with entries from data['satellites'].
+    6. On any exception (missing file, parse error, verification failure, etc.):
+       - A UI notification "Registry: Verification Failed." is enqueued.
+       - TRUSTED_SATELLITES remains unchanged.
 
-Notes:
-- This function enforces cryptographic integrity of the trusted registry.
-- Only registries signed by the origin are accepted.
-- Global state modified: TRUSTED_SATELLITES.
-- Called during startup and periodic registry synchronization.
-"""
+    Notes:
+    - This function enforces cryptographic integrity of the trusted registry.
+    - Only registries signed by the origin are accepted.
+    - Global state modified: TRUSTED_SATELLITES.
+    - Called during startup and periodic registry synchronization.
+    """
     global TRUSTED_SATELLITES
     if os.path.exists(LIST_JSON_PATH):
         try:
@@ -518,38 +526,38 @@ Notes:
             UI_NOTIFICATIONS.put_nowait("Registry: Verification Failed.")
 
 def sign_and_save_satellite_list():
-"""
-Step 3b: Sign and persist the trusted satellite registry for distribution.
+    """
+    Step 3b: Sign and persist the trusted satellite registry for distribution.
+    
+    Purpose:
+    - Produces the authoritative, signed registry of trusted satellites.
+    - Ensures integrity and authenticity of the registry using the
+      origin satellite's private signing key.
 
-Purpose:
-- Produces the authoritative, signed registry of trusted satellites.
-- Ensures integrity and authenticity of the registry using the
-  origin satellite's private signing key.
+    Behavior:
+    1. Serializes the TRUSTED_SATELLITES structure into a canonical JSON form.
+    2. Loads the origin private key from disk.
+    3. Signs the serialized registry using RSA with SHA-256.
+    4. Writes a JSON file containing:
+       - 'data': the trusted satellite registry
+       - 'signature': base64-encoded signature over the data
+    5. Saves the result to LIST_JSON_PATH for later distribution
+       via GitHub or other sync mechanisms.
 
-Behavior:
-1. Serializes the TRUSTED_SATELLITES structure into a canonical JSON form.
-2. Loads the origin private key from disk.
-3. Signs the serialized registry using RSA with SHA-256.
-4. Writes a JSON file containing:
-   - 'data': the trusted satellite registry
-   - 'signature': base64-encoded signature over the data
-5. Saves the result to LIST_JSON_PATH for later distribution
-   via GitHub or other sync mechanisms.
+    Operational Context:
+    - Intended to run ONLY on the origin satellite.
+    - Called after registry mutations (add/update/remove satellite).
+    - Followers must verify this signature before accepting registry updates.
 
-Operational Context:
-- Intended to run ONLY on the origin satellite.
-- Called after registry mutations (add/update/remove satellite).
-- Followers must verify this signature before accepting registry updates.
+    Failure Handling:
+    - Any signing or file I/O error results in a UI notification.
+    - No partial or unsigned registry is written.
 
-Failure Handling:
-- Any signing or file I/O error results in a UI notification.
-- No partial or unsigned registry is written.
-
-Security Notes:
-- This function establishes the cryptographic root of trust
-  for the entire satellite network.
-- Compromise of the origin private key compromises registry trust.
-"""
+    Security Notes:
+    - This function establishes the cryptographic root of trust
+      for the entire satellite network.
+    - Compromise of the origin private key compromises registry trust.
+    """
     global LIST_UPDATED_PENDING_SAVE
     if not IS_ORIGIN or not ORIGIN_PRIVKEY_PEM: return
     try:
@@ -563,45 +571,45 @@ Security Notes:
     except Exception: pass
 
 def generate_keys_and_certs():
-"""
-Step 3a: Generate or load cryptographic identity material for this satellite.
+    """
+    Step 3a: Generate or load cryptographic identity material for this satellite.
 
-Purpose:
-- Establishes the cryptographic identity of the satellite node.
-- Ensures the presence of a private key, public key, and TLS certificate
-  before any network communication occurs.
+    Purpose:
+    - Establishes the cryptographic identity of the satellite node.
+    - Ensures the presence of a private key, public key, and TLS certificate
+      before any network communication occurs.
 
-Behavior:
-- Checks whether the required key and certificate files already exist
-  on disk.
-- If all required files are present:
-    - Loads the existing private key, public key, and certificate.
-- If any required file is missing:
-    - Generates a new RSA private key.
-    - Derives the corresponding public key.
-    - Generates a self-signed X.509 TLS certificate.
-    - Writes all generated artifacts to disk.
+    Behavior:
+    - Checks whether the required key and certificate files already exist
+      on disk.
+    - If all required files are present:
+        - Loads the existing private key, public key, and certificate.
+    - If any required file is missing:
+        - Generates a new RSA private key.
+        - Derives the corresponding public key.
+        - Generates a self-signed X.509 TLS certificate.
+        - Writes all generated artifacts to disk.
 
-Side Effects:
-- Writes cryptographic material to the filesystem if regeneration is required.
-- Computes and sets the TLS fingerprint derived from the certificate.
-- Updates global identity-related state used elsewhere in the program.
+    Side Effects:
+    - Writes cryptographic material to the filesystem if regeneration is required.
+    - Computes and sets the TLS fingerprint derived from the certificate.
+    - Updates global identity-related state used elsewhere in the program.
 
-Operational Context:
-- Called once during startup as part of identity establishment.
-- Must run before any satellite announces itself or accepts connections.
-- Used by both origin and non-origin satellites.
+    Operational Context:
+    - Called once during startup as part of identity establishment.
+    - Must run before any satellite announces itself or accepts connections.
+    - Used by both origin and non-origin satellites.
 
-Security Notes:
-- Certificates are self-signed; trust is established via fingerprint
-  verification and signed registry distribution rather than a CA.
-- Regenerating keys will change the satellite’s identity and TLS fingerprint.
-- Private key material must be protected from unauthorized access.
+    Security Notes:
+    - Certificates are self-signed; trust is established via fingerprint
+      verification and signed registry distribution rather than a CA.
+    - Regenerating keys will change the satellite’s identity and TLS fingerprint.
+    - Private key material must be protected from unauthorized access.
 
-Design Notes:
-- Function is intentionally idempotent and safe to call multiple times.
-- No network operations are performed here to keep boot-time complexity low.
-"""
+    Design Notes:
+    - Function is intentionally idempotent and safe to call multiple times.
+    - No network operations are performed here to keep boot-time complexity low.
+    """
     global SATELLITE_ID, TLS_FINGERPRINT, IS_ORIGIN, ADVERTISED_IP, ORIGIN_PUBKEY_PEM, ORIGIN_PRIVKEY_PEM
     # 1. Cert Generation
     if not os.path.exists(CERT_PATH):
@@ -637,58 +645,58 @@ Design Notes:
     ADVERTISED_IP = get_local_ip()
 
 async def handle_node_sync(reader, writer):
-"""
-Step 6: Handle inbound satellite → origin synchronization connections.
+    """
+    Step 6: Handle inbound satellite → origin synchronization connections.
 
-Purpose:
-- Acts as the server-side entry point for satellites reporting their
-  identity, status, and operational metadata to the origin node.
-- Allows the origin to maintain an authoritative, signed registry of
-  trusted satellites and their advertised endpoints.
+    Purpose:
+    - Acts as the server-side entry point for satellites reporting their
+      identity, status, and operational metadata to the origin node.
+    - Allows the origin to maintain an authoritative, signed registry of
+      trusted satellites and their advertised endpoints.
 
-Operational Role:
-- This handler is only meaningful on the origin node.
-- Non-origin satellites may still accept connections, but will not
-  process or persist synchronization payloads.
+    Operational Role:
+    - This handler is only meaningful on the origin node.
+    - Non-origin satellites may still accept connections, but will not
+      process or persist synchronization payloads.
 
-Expected Payload:
-- Incoming data must be valid JSON containing, at minimum:
-    - id: unique satellite identifier
-    - fingerprint: TLS certificate fingerprint
-    - ip: advertised network address
-    - port: listening TCP port
-- Optional fields may include:
-    - nodes: known storage or peer nodes
-    - repair_queue: pending repair tasks
+    Expected Payload:
+    - Incoming data must be valid JSON containing, at minimum:
+        - id: unique satellite identifier
+        - fingerprint: TLS certificate fingerprint
+        - ip: advertised network address
+        - port: listening TCP port
+    - Optional fields may include:
+        - nodes: known storage or peer nodes
+        - repair_queue: pending repair tasks
 
-Validation & Error Handling:
-- Payload keys are validated before processing.
-- Missing or malformed payloads raise explicit errors.
-- Any exception during parsing or validation results in:
-    - A notification being emitted to the UI notification system.
-    - The connection being closed cleanly.
+    Validation & Error Handling:
+    - Payload keys are validated before processing.
+    - Missing or malformed payloads raise explicit errors.
+    - Any exception during parsing or validation results in:
+        - A notification being emitted to the UI notification system.
+        - The connection being closed cleanly.
 
-Behavior on Origin:
-- Updates or inserts the satellite entry into TRUSTED_SATELLITES.
-- Persists changes by signing and saving the registry when necessary.
-- Emits UI notifications for new registrations or updates.
+    Behavior on Origin:
+    - Updates or inserts the satellite entry into TRUSTED_SATELLITES.
+    - Persists changes by signing and saving the registry when necessary.
+    - Emits UI notifications for new registrations or updates.
 
-Side Effects:
-- Mutates global state (TRUSTED_SATELLITES).
-- Writes registry data to disk via signed persistence.
-- Emits messages into UI_NOTIFICATIONS for operator visibility.
+    Side Effects:
+    - Mutates global state (TRUSTED_SATELLITES).
+    - Writes registry data to disk via signed persistence.
+    - Emits messages into UI_NOTIFICATIONS for operator visibility.
 
-Concurrency Notes:
-- Designed to be called concurrently by asyncio’s TCP server.
-- Does not block the event loop beyond minimal JSON parsing and I/O.
+    Concurrency Notes:
+    - Designed to be called concurrently by asyncio’s TCP server.
+    - Does not block the event loop beyond minimal JSON parsing and I/O.
 
-Design Notes:
-- No authentication handshake is performed here beyond payload validation;
-  trust enforcement relies on fingerprint verification and signed registry
-  distribution.
-- This function is intentionally strict to surface malformed or unexpected
-  sync attempts during early testing and development.
-"""
+    Design Notes:
+    - No authentication handshake is performed here beyond payload validation;
+      trust enforcement relies on fingerprint verification and signed registry
+      distribution.
+    - This function is intentionally strict to surface malformed or unexpected
+      sync attempts during early testing and development.
+    """
     peer_ip = writer.get_extra_info("peername")[0]
 
     try:
@@ -741,20 +749,20 @@ Design Notes:
         await writer.wait_closed()
         
 async def announce_to_origin():
-"""
-STEP 2: Announce satellite to origin
+    """
+    STEP 2: Announce satellite to origin
 
-- Non-origin satellites notify the origin of their presence after a short delay (3s)
-  to allow boot sequence tasks (key generation, registry loading) to complete.
-- Runs once per boot, not periodically.
-- Payload includes:
-  - 'id': SATELLITE_ID
-  - 'fingerprint': TLS_FINGERPRINT
-  - 'ip': ADVERTISED_IP
-  - 'port': LISTEN_PORT
-- Origin may register or update the satellite in TRUSTED_SATELLITES.
-- Connection errors or failures are reported via UI_NOTIFICATIONS queue.
-"""
+    - Non-origin satellites notify the origin of their presence after a short delay (3s)
+      to allow boot sequence tasks (key generation, registry loading) to complete.
+    - Runs once per boot, not periodically.
+    - Payload includes:
+      - 'id': SATELLITE_ID
+      - 'fingerprint': TLS_FINGERPRINT
+      - 'ip': ADVERTISED_IP
+      - 'port': LISTEN_PORT
+    - Origin may register or update the satellite in TRUSTED_SATELLITES.
+    - Connection errors or failures are reported via UI_NOTIFICATIONS queue.
+    """
     await asyncio.sleep(3)  # allow boot to finish
 
     if IS_ORIGIN:
