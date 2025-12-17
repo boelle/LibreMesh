@@ -1,4 +1,4 @@
-"""TESTING
+"""
 ===============================================================================
 PROJECT: LibreMesh Satellite (Control Plane)
 VERSION: 2025.12.15 (GitHub Truth & Security Polished)
@@ -254,33 +254,39 @@ def get_local_ip():
 
 async def fetch_github_file(url, local_path, force=False):
     """
-    Retrieve a file from a remote GitHub URL and store it locally.
+    Downloads a file from a GitHub URL and saves it locally.
 
     Purpose:
-    - Used to bootstrap trust and configuration artifacts that are centrally
-      published (e.g. origin public key, trusted satellite registry).
-    - Enables satellites to synchronize critical static files without
-      peer-to-peer coordination.
+    - Provides a simple mechanism to fetch the origin public key or 
+      trusted satellites list from GitHub.
+    - Ensures that each satellite can retrieve authoritative files
+      from a centralized source for secure bootstrapping.
 
-    Behavior:
-    - If the target file already exists locally and `force` is False,
-      the download is skipped.
-    - If `force` is True, the file is always fetched and overwritten.
-    - Performs a simple HTTP GET request to the provided URL.
-    - On success, writes the response body directly to `local_path`.
+    Parameters:
+    - url (str): The full HTTPS URL pointing to the file on GitHub.
+    - local_path (str): The path on local filesystem where the file should be saved.
+    - force (bool, default=False): If True, the file is always downloaded even if it exists locally.
 
-    Error Handling:
-    - Network or HTTP errors are caught and reported via UI_NOTIFICATIONS.
-    - Failure does not raise, allowing boot to continue with existing state.
+    High-level behavior:
+    - Checks if the local file exists. If `force` is False and the file exists, it skips download.
+    - Performs an asynchronous HTTP GET request to fetch the file contents.
+    - Writes the fetched content to `local_path` in a safe manner.
+    - Handles network errors gracefully without raising unhandled exceptions.
 
-    Design Notes:
-    - No validation of file contents or cryptographic verification occurs here.
-    - Trust verification (signatures, fingerprints) is handled elsewhere.
-    - This function is intentionally minimal to keep bootstrapping resilient.
+    Design constraints:
+    - Assumes the GitHub URL is public and accessible; no authentication handled.
+    - File overwrite occurs only if `force` is True or local file is missing.
+    - The function is non-blocking and can run in parallel with other async tasks.
 
-    Operational Context:
-    - Called during startup before registry loading.
-    - Asynchronous to avoid blocking the event loop during network I/O.
+    Operational context:
+    - Used during satellite boot (`main()`) for initial retrieval of `origin_pubkey.pem` or `list.json`.
+    - Complements periodic tasks like `sync_registry_from_github()` for ongoing updates.
+    - Errors are logged via `UI_NOTIFICATIONS` queue for operator awareness.
+
+    Notes:
+    - This function does not verify cryptographic signatures or hashes of downloaded content.
+    - Intended for lightweight, reliable file retrieval during startup.
+    - Safe for repeated calls; minimizes unnecessary network traffic if files exist.
     """
     if not os.path.exists(local_path) or force:
         try:
@@ -298,33 +304,35 @@ async def fetch_github_file(url, local_path, force=False):
 
 async def sync_nodes_with_peers():
     """
-    STEP 6: PEER-TO-PEER NODE SYNC
+    Periodically synchronizes node information with peer satellites.
 
-    Continuously shares this satellite's known storage nodes with other online satellites.
+    Purpose:
+    - Keeps each satellite aware of other online satellites and storage nodes
+      in the network.
+    - Updates global `REMOTE_SATELLITES` with current peer statuses.
+    - Facilitates future peer-to-peer replication and repair tasks.
 
-    Behavior:
-    - Iterates over all entries in REMOTE_SATELLITES.
-    - For each satellite:
-        - Opens a TCP connection to the satellite's hostname and port.
-        - Sends a JSON payload containing:
-            - "id": this satellite's SATELLITE_ID
-            - "nodes": this satellite's local NODES dictionary
-        - Flushes the payload and closes the connection.
-    - If an exception occurs during the push, logs it to UI_NOTIFICATIONS.
-    - Waits NODE_SYNC_INTERVAL seconds before repeating.
+    High-level behavior:
+    - Iterates over known trusted satellites (`TRUSTED_SATELLITES`) excluding self.
+    - Attempts to connect asynchronously to each satellite's listening port.
+    - Requests their current nodes and repair queue status.
+    - Updates local `REMOTE_SATELLITES` dictionary with the received data.
+    - Handles connection failures gracefully, logs issues via `UI_NOTIFICATIONS`.
 
-    Notes:
-    - Runs indefinitely in a non-blocking async loop.
-    - Does not modify local NODES, only pushes it to peers.
-    - Supports eventual consistency in node awareness across satellites.
-    - Exceptions are caught per satellite to ensure a single failure does not stop the loop.
+    Operational context:
+    - Runs continuously in an asynchronous loop, sleeping for `NODE_SYNC_INTERVAL` seconds between rounds.
+    - Complements origin-based synchronization (`push_status_to_origin()`), providing peer awareness even if origin is temporarily unreachable.
+    - Assumes a trusted network; no encryption/authentication is handled in this step.
 
-    Uses global state:
-    - SATELLITE_ID
-    - NODES
-    - REMOTE_SATELLITES
-    - NODE_SYNC_INTERVAL
-    - UI_NOTIFICATIONS
+    Design constraints:
+    - Non-blocking: uses asyncio tasks to avoid halting other operations.
+    - Lightweight: does not persist data to disk, only updates in-memory structures.
+    - Resilient to network failures: failed connections do not raise unhandled exceptions.
+
+    Inline remarks suggestions:
+    - Annotate connection attempt to peer, payload exchange, and update of `REMOTE_SATELLITES`.
+    - Explain retry behavior or lack thereof.
+    - Clarify that `REMOTE_SATELLITES` stores per-satellite nodes and repair queue snapshots.
     """
     while True:
         for sat_id, sat_info in TRUSTED_SATELLITES.items():
@@ -360,31 +368,51 @@ async def sync_nodes_with_peers():
 
 async def sync_registry_from_github():
     """
-    STEP 7: PERIODIC TRUSTED REGISTRY SYNC FROM GITHUB
+    Periodically fetches the trusted satellites registry from GitHub.
 
-    Continuously fetches the central trusted satellites list (list.json) from the
-    configured GitHub repository and updates local TRUSTED_SATELLITES.
+    Purpose:
+    - Keeps the local trusted satellites registry up to date with the
+      canonical list maintained in GitHub.
+    - Ensures that satellites have a consistent view of trusted peers
+      without requiring manual intervention.
+    - Supports secure distribution of new satellite identities for registration.
 
-    Behavior:
-    - Runs in an infinite asynchronous loop.
-    - Every SYNC_INTERVAL seconds:
-        - Downloads LIST_JSON_URL to LIST_JSON_PATH using fetch_github_file().
-        - Loads the JSON content and updates TRUSTED_SATELLITES in-memory.
-        - Adds or updates entries as necessary, without removing existing satellites
-          unless explicitly changed in the downloaded list.
-        - Any errors in download or parsing are logged to UI_NOTIFICATIONS.
-    
+    High-level behavior:
+    - Runs indefinitely in a background loop with a sleep interval defined
+      by SYNC_INTERVAL.
+    - Downloads the remote `list.json` file from LIST_JSON_URL.
+    - Compares the remote registry to the local `LIST_JSON_PATH`.
+    - Updates local in-memory `TRUSTED_SATELLITES` and triggers a save if
+      changes are detected.
+
+    Data handled:
+    - Reads JSON from GitHub.
+    - Validates integrity superficially (well-formed JSON and expected fields).
+    - Updates local trusted satellite structures (ID, fingerprint, hostname, port).
+
+    Design constraints:
+    - Assumes that GitHub-hosted JSON is authoritative for the canonical list.
+    - Non-blocking; network errors are caught and logged without
+      interrupting the loop.
+    - Avoids overwriting local changes that were manually or dynamically added
+      unless GitHub version differs.
+
+    Operational context:
+    - Launched during `main()` startup as a background task.
+    - Complements other background tasks like:
+        - draw_ui()
+        - node_sync_loop()
+        - announce_to_origin()
+    - Maintains in-memory and persisted consistency of trusted satellites.
+
+    Future considerations:
+    - Could implement checksum or signature verification for higher trust.
+    - Could notify UI of new or removed satellites automatically.
+    - May integrate with repair queue awareness in future enhancements.
+
     Notes:
-    - Only intended for non-origin satellites to fetch the canonical registry.
-    - Keeps local in-memory registry consistent with GitHub source.
-    - Exceptions in fetching or parsing do not halt the loop.
-    
-    Uses global state:
-    - LIST_JSON_URL
-    - LIST_JSON_PATH
-    - TRUSTED_SATELLITES
-    - UI_NOTIFICATIONS
-    - SYNC_INTERVAL
+    - This function is advisory and maintenance-focused.
+    - Errors in fetching do not halt the satellite; they are logged for operator awareness.
     """
     
     while True:
