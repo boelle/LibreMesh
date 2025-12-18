@@ -374,6 +374,47 @@ async def sync_nodes_with_peers():
 
         await asyncio.sleep(NODE_SYNC_INTERVAL)
 
+async def safe_send_payload(reader_writer, payload):
+    """
+    Safely send a JSON-serializable payload over an asyncio TCP connection.
+
+    Purpose:
+    - Encodes the given payload as JSON and sends it to the connected peer.
+    - Ensures the write buffer is flushed before closing the connection.
+    - Handles any exceptions gracefully, reporting failures via UI notifications.
+
+    Parameters:
+    - reader_writer (tuple): A tuple of (reader, writer) from `asyncio.open_connection()`.
+    - payload (dict): JSON-serializable data to send over the connection.
+
+    Behavior:
+    - Writes the JSON-encoded payload to the socket.
+    - Awaits `drain()` to ensure data is transmitted.
+    - Introduces a short delay to guarantee data is flushed before closing.
+    - Closes the writer cleanly with `wait_closed()`.
+    - On any exception (connection failure, encoding error, etc.), a notification is
+      pushed to `UI_NOTIFICATIONS` instead of raising an error.
+
+    Operational Context:
+    - Can be used wherever a follower satellite needs to send data to the origin
+      or another peer.
+    - Helps centralize and standardize payload transmission with robust error handling.
+
+    Example:
+        reader, writer = await asyncio.open_connection(host, port)
+        await safe_send_payload((reader, writer), {"id": SATELLITE_ID, "status": "ok"})
+    """
+    reader, writer = reader_writer
+    try:
+        writer.write(json.dumps(payload).encode())
+        await writer.drain()
+        # Ensure data is flushed before closing
+        await asyncio.sleep(0.05)
+        writer.close()
+        await writer.wait_closed()
+    except Exception as e:
+        UI_NOTIFICATIONS.put_nowait(f"Failed to send payload: {e}")
+
 async def sync_registry_from_github():
     """
     Step 3a: Periodically fetches the trusted satellites registry from GitHub.
@@ -700,27 +741,21 @@ async def handle_node_sync(reader, writer):
     peer_ip = writer.get_extra_info("peername")[0]
 
     try:
-        data = await reader.read(4096) # Read incoming payload from satellite
+        # Read until EOF to ensure full payload is received
+        data = await reader.read()  # read all bytes until connection closes
         payload = json.loads(data.decode())
-        required_keys = {"id", "fingerprint", "ip", "port"} # Validate required fields
+        required_keys = {"id", "fingerprint", "ip", "port"}
 
         if not required_keys.issubset(payload):
-            raise ValueError(
-                f"Invalid node sync payload keys={list(payload.keys())}"
-            )
+            raise ValueError(f"Invalid node sync payload keys={list(payload.keys())}")
 
-        sat_id = payload["id"] # optional node snapshot
+        sat_id = payload["id"]
         fingerprint = payload["fingerprint"]
         ip = payload["ip"]
         port = payload["port"]
 
         # Only origin accepts registrations
         if IS_ORIGIN:
-            # Validate required payload keys
-            required_keys = {"id", "fingerprint", "ip", "port"}
-            if not required_keys.issubset(payload.keys()):
-                raise ValueError(f"Invalid node sync payload keys={list(payload.keys())}")
-
             existing = TRUSTED_SATELLITES.get(sat_id)
 
             new_entry = {
@@ -729,7 +764,7 @@ async def handle_node_sync(reader, writer):
                 "hostname": ip,
                 "port": port,
                 "nodes": payload.get("nodes", {}),
-                "repair_queue": payload.get("repair_queue", []) # optional repair queue snapshot
+                "repair_queue": payload.get("repair_queue", [])
             }
 
             if existing != new_entry:
@@ -778,10 +813,7 @@ async def announce_to_origin():
             "port": LISTEN_PORT, # advertised network IP
         }
 
-        writer.write(json.dumps(payload).encode())
-        await writer.drain()
-        writer.close()
-        await writer.wait_closed()
+        await safe_send_payload((reader, writer), payload)
 
     except Exception:
         UI_NOTIFICATIONS.put_nowait("Failed to reach origin")
@@ -813,11 +845,7 @@ async def register_with_origin():
             "port": LISTEN_PORT, # advertised IP
         }
 
-        writer.write(json.dumps(payload).encode())
-        await writer.drain()
-
-        writer.close()
-        await writer.wait_closed()
+        await safe_send_payload((reader, writer), payload)
 
         UI_NOTIFICATIONS.put_nowait("Registered with origin")
 
@@ -1116,8 +1144,7 @@ async def push_status_to_origin():
         # Open outbound TCP connection to the origin's sync endpoint
         reader, writer = await asyncio.open_connection(ORIGIN_HOST, ORIGIN_PORT)
         # Send JSON-encoded status payload
-        writer.write(json.dumps(payload).encode())
-        await writer.drain()
+        await safe_send_payload((reader, writer), payload)
     except Exception as e:
         # Non-fatal: log failure but allow future retries via node_sync_loop
         UI_NOTIFICATIONS.put_nowait(f"Node push error: {e}")

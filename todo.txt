@@ -1,0 +1,122 @@
+Project: LibreMesh — Implementation TODO
+===============================================
+
+Purpose
+-------
+- Provide an implementation-ready, developer-facing TODO that documents
+  the immediate next steps to make `satellite.py` production-ready for
+  control-plane tasks: Repair orchestration, Fragmenter (RS k-of-n), Node
+  Auditor, and E2E client-side encryption.
+
+How to use
+----------
+- This file is authoritative for short-term implementation priorities.
+- Keep small, actionable items at the top; include minimal acceptance
+  criteria and function signatures where helpful.
+
+Top-level Tasks (priority order)
+--------------------------------
+1) Persist this TODO (done)
+   - File: todo.txt (this file)
+
+2) Scaffold `repair_worker` (Origin-backed job DB)
+   - Purpose: origin stores job claims, leases and arbitration via `aiosqlite`.
+   - Persistence: `repairs.db` (SQLite) with table `repair_jobs(job_id, fragment_id, object_id, shards_needed, claimed_by, lease_expires, attempts, status, last_update)`.
+   - Claiming semantics (API):
+       - `claim_repair_job(job_id, claimer_id, lease_secs=300)` — returns True/False and lease expiry.
+       - `renew_repair_claim(job_id, claimer_id, lease_secs=300)` — extend lease if claimer still holds it.
+       - `complete_repair_job(job_id, claimer_id)` — mark repaired and remove job.
+   - Concurrency: enforce single-claimer by atomic SQL update (WHERE claimed_by IS NULL OR lease_expires < now).
+   - Acceptance: unit tests that simulate concurrent claim attempts; origin resolves without double-work.
+
+3) Implement `make_fragments()` / `reconstruct_file()` (Fragmenter)
+   - Use Reed–Solomon k-of-n (suggest libs: `reedsolo` or `zfec`).
+   - API:
+       - `make_fragments(data_bytes: bytes, k: int, n: int) -> List[bytes]` — returns n shards, each encoded deterministically.
+       - `reconstruct_file(shards: Dict[int, bytes], k: int, n: int) -> bytes` — rebuild original bytes when at least k shards present.
+   - Performance: run heavy RS work in ProcessPoolExecutor to avoid blocking event loop.
+   - Acceptance: round-trip encode/decode tests with missing shard indexes.
+
+4) Storage RPCs (node-facing) — minimal set
+   - `put_fragment(object_id, fragment_index, data)` — store fragment on node.
+   - `get_fragment(object_id, fragment_index)` — return fragment bytes or 404-like error.
+   - `list_fragments(object_id)` — list fragment indexes present for object.
+   - Wire format: JSON metadata + raw fragment body (or base64 when necessary).
+   - Acceptance: small integration test between a mock node and repair_worker.
+
+5) Node Auditor & Scoring
+   - Purpose: detect unreliable nodes and avoid assigning repairs to them.
+   - Audit schedule: periodic `audit_node(node_id)` that attempts `get_fragment` for random known objects and measures latency/success.
+   - Score model: simple moving average of success_rate (0..1) and latency; nodes with success_rate < 0.9 or latency > config threshold are deprioritized.
+   - API:
+       - `audit_node(node_id) -> {'score': float, 'last_audit': ts, 'reason': str}`
+       - `update_node_score(node_id, score)` persisted in-memory and optionally saved to `node_scores.json`.
+   - Acceptance: tests that simulate node failures and ensure auditor lowers score and repair_worker avoids them.
+
+6) Client-side E2E Encryption
+   - Use AEAD (AES-GCM) or libs from `cryptography` AEAD APIs.
+   - Flow: client encrypts file -> produces ciphertext, store AEAD nonce and key-encryption metadata (key must be kept safe by client operator).
+   - Fragmentation: encrypt whole object first, then fragment ciphertext; no fragment alone leaks plaintext.
+   - Metadata: store `encryption: { alg: 'AES-GCM', key_id: '<id>', nonce: base64 }` alongside object manifest.
+   - Acceptance: decrypt after reconstruct_file; integration test with end-to-end encrypt→fragment→reconstruct→decrypt.
+
+7) Tests & Documentation
+   - Add unit tests for: RS encode/decode, claim/renew concurrency, auditor scoring, storage RPCs.
+   - Add `README-dev.md` with: how to run tests, how to run a local origin + follower, and minimal debug tips.
+
+Config Defaults (suggested)
+---------------------------
+- `persistence.mode = 'origin_aiosqlite'`
+- `repair.lease_secs = 300`
+- `repair.renew_interval = 60`
+- `repair.max_attempts = 5`
+- `fragmenter.k = 6`
+- `fragmenter.n = 10`
+- `auditor.cpu_threshold = 85` (percent, used to avoid heavy ops when CPU high)
+
+Job JSON Schema (example)
+-------------------------
+{
+  "job_id": "string-uuid",
+  "object_id": "hash-or-id",
+  "fragment_index_missing": [0,1,5],
+  "shards_needed": 3,
+  "claimed_by": null,
+  "lease_expires": null,
+  "attempts": 0,
+  "status": "open",  // open | claimed | in_progress | done | failed
+  "created_at": 1670000000
+}
+
+Function Signatures (recommended)
+---------------------------------
+- claim_repair_job(job_id: str, claimer_id: str, lease_secs: int=300) -> (bool, int)
+- renew_repair_claim(job_id: str, claimer_id: str, lease_secs: int=300) -> bool
+- complete_repair_job(job_id: str, claimer_id: str) -> bool
+- make_fragments(data_bytes: bytes, k: int, n: int) -> List[bytes]
+- reconstruct_file(shards: Dict[int, bytes], k: int, n: int) -> bytes
+- put_fragment(node_addr: str, object_id: str, index: int, data: bytes) -> bool
+- get_fragment(node_addr: str, object_id: str, index: int) -> Optional[bytes]
+- audit_node(node_id: str) -> Dict
+
+Acceptance Criteria (MVP)
+------------------------
+- Origin persists repair job claims to `repairs.db` and enforces exclusive leases.
+- A worker can claim a job, fetch k shards from nodes, reconstruct object, and PUT missing fragments back to nodes.
+- Reed–Solomon implementation passes round-trip tests with up to (n-k) missing shards.
+- Auditor lowers node score on repeated failures and repair_worker avoids these nodes.
+
+Notes & Operational Guidance
+---------------------------
+- Run RS encode on a machine with spare CPU; use ProcessPoolExecutor for heavy ops.
+- Prefer write-back-only repair policy to reduce risk of corrupting original object.
+- Keep origin `repairs.db` backed up; it is authoritative for job claims.
+- For small deployments, `k=6,n=10` is a reasonable starting point; tune for bandwidth and storage.
+
+Next Actions (developer)
+------------------------
+1. Verify `todo.txt` created and readable on UNC share.
+2. Implement `repair_worker` scaffold and tests.
+3. Implement `make_fragments` with chosen RS lib and tests.
+
+-- end of todo.txt
