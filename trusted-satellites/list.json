@@ -8,17 +8,17 @@
                 "port": 8888,
                 "storage_port": 0,
                 "metrics": {
-                    "cpu_percent": 0.0,
-                    "memory_percent": 33.4,
-                    "memory_available_mb": 7970.0
+                    "cpu_percent": 1.2,
+                    "memory_percent": 33.9,
+                    "memory_available_mb": 7914.0
                 },
-                "last_seen": 1766526534.2946403,
+                "last_seen": 1766527394.7149723,
                 "repair_metrics": {
                     "jobs_created": 0,
                     "jobs_completed": 0,
                     "jobs_failed": 0,
                     "fragments_checked": 0,
-                    "last_health_check": null
+                    "last_health_check": 1766527164.2972927
                 },
                 "gc_stats": {
                     "last_run": 0.0,
@@ -40,15 +40,51 @@
                 "nodes": {},
                 "repair_queue": [],
                 "metrics": {
-                    "cpu_percent": 7.6,
-                    "memory_percent": 33.4,
-                    "memory_available_mb": 7970.0
+                    "cpu_percent": 2.5,
+                    "memory_percent": 34.0,
+                    "memory_available_mb": 7898.0
                 },
                 "zone": null,
-                "last_seen": 1766526511.2310407,
+                "last_seen": 1766527384.2072542,
+                "reachable_direct": true
+            },
+            {
+                "id": "LibreMesh-Storage-01",
+                "fingerprint": "1vf5HSYX3gz2ppLOO6YDSWEErPk7XW1Nwmx/eMIlONA=",
+                "hostname": "192.168.0.100",
+                "port": 0,
+                "storage_port": 9900,
+                "capacity_bytes": 1073741824,
+                "used_bytes": 0,
+                "metrics": {
+                    "cpu_percent": 0.0,
+                    "memory_percent": 33.6,
+                    "memory_available_mb": 7945.0
+                },
+                "zone": "eu-central",
+                "last_seen": 1766527373.0490344,
+                "mode": "storagenode",
+                "reachable_direct": false
+            },
+            {
+                "id": "LibreMesh-Storage-02",
+                "fingerprint": "JZKQTXdXyqtiUAxSs/FeTD44wk2YVON4D6FVKca4p8g=",
+                "hostname": "192.168.0.101",
+                "port": 0,
+                "storage_port": 9901,
+                "capacity_bytes": 1073741824,
+                "used_bytes": 0,
+                "metrics": {
+                    "cpu_percent": 0.0,
+                    "memory_percent": 33.9,
+                    "memory_available_mb": 7905.0
+                },
+                "zone": "test-local",
+                "last_seen": 1766527378.6735187,
+                "mode": "storagenode",
                 "reachable_direct": false
             }
         ]
     },
-    "signature": "LBilGKraIS1gRWbm1xjhaZsBfuIWSPiBnl2tMvd02OfhDBTU+Gts3rPCdhNgRTtcD0bvH3W3qRvcrM7HTJY/gYZUJp0iYfubfpECB0E2T8JzkQw/Yw70CJn0XuqqWxPZ6aX1JkfZetk4elTEfIa/gPP/rGNXN1HYg3H4g/445hdeXuj0ZLxtVj+2XFNpWpUpq5EbYeF2x51tSZFgrZil5hhaXMGe3y8gRmxs4b1ZVQtNNWNGmhnB0AwopiOprk0+oqPomt7DL6ZK7JgPBUkPUJ1r9IVyUNBINBdS3OSQ3defXJJC93gVym3mqVlDA1vn6t4IqQz0JXRr2UTDWQG85Q=="
+    "signature": "lvtgUOmtWQgg8GmoOInuz3zBgX6vF/qdivACbQQXqYoFndiGI35Mr3XtJ0mrngqK8/qrB5Vdf0tGpbw0kjtEGjCRJkMBgvK5NtE3SzJuaGFA9qp1A9+yhG0Nc+71iKhReNnbfNKDy93EttZBbtM7DGd2hmuGnKDhSKQ3cRoWZdAe8brTSqtp2s3KKTuhkKP90HpGZ/vSlQJLUMYYJp+Y+LiGTQAHeXFSvZADdn79Jr7tEey8ErXTZaP0VnkkdrjfuFyWNZ8e0h3Gao+GC4y6vmiinyV0wz5lLS5ZXKFqUff1QekQs0IdbzN1ET1jJGhJAxvme/qbKVnY7ogffx0Qyg=="
 }
