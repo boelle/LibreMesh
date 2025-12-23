@@ -8,17 +8,17 @@
                 "port": 8888,
                 "storage_port": 0,
                 "metrics": {
-                    "cpu_percent": 1.3,
+                    "cpu_percent": 0.0,
                     "memory_percent": 33.4,
-                    "memory_available_mb": 7967.0
+                    "memory_available_mb": 7970.0
                 },
-                "last_seen": 1766525113.7931223,
+                "last_seen": 1766526534.2946403,
                 "repair_metrics": {
                     "jobs_created": 0,
                     "jobs_completed": 0,
                     "jobs_failed": 0,
                     "fragments_checked": 0,
-                    "last_health_check": 1766524962.127617
+                    "last_health_check": null
                 },
                 "gc_stats": {
                     "last_run": 0.0,
@@ -40,15 +40,15 @@
                 "nodes": {},
                 "repair_queue": [],
                 "metrics": {
-                    "cpu_percent": 11.4,
-                    "memory_percent": 33.5,
-                    "memory_available_mb": 7952.0
+                    "cpu_percent": 7.6,
+                    "memory_percent": 33.4,
+                    "memory_available_mb": 7970.0
                 },
                 "zone": null,
-                "last_seen": 1766525102.3551188,
+                "last_seen": 1766526511.2310407,
                 "reachable_direct": false
             }
         ]
     },
-    "signature": "u/VkdLw+oQsTPqNaWLL/s099/Em0gfcbX/iuK3b6CWcUR50zPzstr++9OkITjB9/VWRdhV2fwoBWcYd/FuujcvK8J6gWXCiawgn2BfT3KxxOM6bl3Y5JWjiSGhMy3UVmIguo+B/c/RlouBc47tH5MjzuCEzcpmW5a6ETBH5rXTw4zVv85yUbovKk35UQL3VhrWPD7zfzYc8W1mSIkCwjtpuECg>
+    "signature": "LBilGKraIS1gRWbm1xjhaZsBfuIWSPiBnl2tMvd02OfhDBTU+Gts3rPCdhNgRTtcD0bvH3W3qRvcrM7HTJY/gYZUJp0iYfubfpECB0E2T8JzkQw/Yw70CJn0XuqqWxPZ6aX1JkfZetk4elTEfIa/gPP/rGNXN1HYg3H4g/445hdeXuj0ZLxtVj+2XFNpWpUpq5EbYeF2x51tSZFgrZil5hhaXMGe3y8gRmxs4b1ZVQtNNWNGmhnB0AwopiOprk0+oqPomt7DL6ZK7JgPBUkPUJ1r9IVyUNBINBdS3OSQ3defXJJC93gVym3mqVlDA1vn6t4IqQz0JXRr2UTDWQG85Q=="
 }
