@@ -8,11 +8,11 @@
                 "port": 8888,
                 "storage_port": 0,
                 "metrics": {
-                    "cpu_percent": 7.4,
-                    "memory_percent": 33.2,
-                    "memory_available_mb": 7996.0
+                    "cpu_percent": 1.3,
+                    "memory_percent": 33.4,
+                    "memory_available_mb": 7967.0
                 },
-                "last_seen": 1766525022.9454045,
+                "last_seen": 1766525113.7931223,
                 "repair_metrics": {
                     "jobs_created": 0,
                     "jobs_completed": 0,
@@ -30,8 +30,25 @@
                     "trash_size": 0,
                     "manifest_size": 0
                 }
+            },
+            {
+                "id": "LibreMesh-Sat-02",
+                "fingerprint": "g4a58RzByzuZnMvAHEdZeAXQRNbz+TsjXl6RB/CKaj8=",
+                "hostname": "192.168.0.163",
+                "port": 8889,
+                "storage_port": 9889,
+                "nodes": {},
+                "repair_queue": [],
+                "metrics": {
+                    "cpu_percent": 11.4,
+                    "memory_percent": 33.5,
+                    "memory_available_mb": 7952.0
+                },
+                "zone": null,
+                "last_seen": 1766525102.3551188,
+                "reachable_direct": false
             }
         ]
     },
-    "signature": "RTr+4FVfWUp4IMyBX0VhtK0ZB79z0+rdpO1MHMTPYByDDyGvw+RIXtjP+DtmeKX+iOmUzPnan94Qy4j45MKniUofCnZmjXx5uHLaHt9evqfoW2xLLUjEahpY6WczRDxiyrC6dCaeL1JCDJ4CDNn3talHL5MT/ZXFT5J4e/5Y88T+VuqU1y4SMKh+IMdsbAd6jQ6fSL0tfc0IApljUxH5lznxLL>
+    "signature": "u/VkdLw+oQsTPqNaWLL/s099/Em0gfcbX/iuK3b6CWcUR50zPzstr++9OkITjB9/VWRdhV2fwoBWcYd/FuujcvK8J6gWXCiawgn2BfT3KxxOM6bl3Y5JWjiSGhMy3UVmIguo+B/c/RlouBc47tH5MjzuCEzcpmW5a6ETBH5rXTw4zVv85yUbovKk35UQL3VhrWPD7zfzYc8W1mSIkCwjtpuECg>
 }
