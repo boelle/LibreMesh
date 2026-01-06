@@ -8,36 +8,22 @@
                 "port": 8888,
                 "storage_port": 0,
                 "metrics": {
-                    "cpu_percent": 65.0,
-                    "memory_percent": 34.2,
-                    "memory_available_mb": 7878.0
+                    "cpu_percent": 53.5,
+                    "memory_percent": 33.4,
+                    "memory_available_mb": 7968.0
                 },
-                "last_seen": 1767697213.4037714,
+                "last_seen": 1767698467.6651242,
                 "repair_metrics": {
                     "jobs_created": 0,
                     "jobs_completed": 0,
                     "jobs_failed": 0,
                     "fragments_checked": 0,
-                    "last_health_check": 1767697152.1887124
+                    "last_health_check": null
                 },
-                "zone": "test-local",
-                "gc_stats": {
-                    "last_run": 0.0,
-                    "objects_scanned": 0,
-                    "versions_expired": 0,
-                    "fragments_reclaimed": 0,
-                    "bytes_reclaimed": 0,
-                    "trash_items_purged": 0,
-                    "trash_size": 0,
-                    "manifest_size": 0
-                },
-                "reachable_direct": false,
-                "reachable_self": false,
-                "reachable_external_count": 0,
-                "reachable_confidence": 0.0
+                "zone": "test-local"
             }
         ],
         "repair_nodes": []
     },
-    "signature": "RhH5hSuL2oA0aqV9Qot5ILMUpTyNQgfomPnAMdYRpAqNTob5NH23cMB9swMQbn9xBCpDVS8vaeWf/12VtEdQZYpCOE95Flkap8Fqk5Qz3sk/UCBHO6qOul9TGXrUrZXsLQRGGcInoR0ILO6E/5Pkq/XQ4C47pAefXd/nLuSxPLnMnZo2uuh5A+9mYgcT7S8SH0VLoeFbypzkKBc0g9MGUDl6CgMd1K118XxUCw/+tivkPRBt2nE01RjsA/3phn6IGjvI/1Fgs39bEK8AkMnFO3QrV52FyE1y7ciSXULgZBAXEQClSyl5NtFA2TPHf9NpLSxFw+TfNDIlDkE4mub/xQ=="
+    "signature": "mzYOWlmgSlQ/zGVlnOSsfedIWmqWA2mtrT0AxTJNycsvzNxpKirunc+pFiKp2Lq6AeOpn/J9gV829A6sC2U1jsbkYtnuhG0J3jvwLx7kwRT+XJjKOkbOkRoCzhlWvzcWqm759+c9QWpv7QSuO3ZgsHJ+pmbwdkBZ41QKU8H4+fpCnF90M65B5gI8YnEAeYqZ6e/qc7SQBHNkwrv517VS9lVt2z4TVlNmf897407RMHAJDzgkgHyBY/CtKr6bEY0HtyGlD/G6mxy88r56RNINMaXyUszTDWdn/Twn9rbLLYCygs5PQo+Mdbkh2bdF3JNv+w+YybWJudX/kMq7bRd9nw=="
 }
