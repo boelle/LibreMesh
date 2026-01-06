@@ -8,21 +8,73 @@
                 "port": 8888,
                 "storage_port": 0,
                 "metrics": {
-                    "cpu_percent": 53.6,
-                    "memory_percent": 33.7,
-                    "memory_available_mb": 7934.0
+                    "cpu_percent": 53.1,
+                    "memory_percent": 34.1,
+                    "memory_available_mb": 7886.0
                 },
-                "last_seen": 1767700041.8242793,
+                "last_seen": 1767700230.8070571,
                 "repair_metrics": {
                     "jobs_created": 0,
                     "jobs_completed": 0,
                     "jobs_failed": 0,
                     "fragments_checked": 0,
-                    "last_health_check": null
+                    "last_health_check": 1767700230.3663907
                 },
-                "zone": "test-local"
+                "zone": "test-local",
+                "gc_stats": {
+                    "last_run": 0.0,
+                    "objects_scanned": 0,
+                    "versions_expired": 0,
+                    "fragments_reclaimed": 0,
+                    "bytes_reclaimed": 0,
+                    "trash_items_purged": 0,
+                    "trash_size": 0,
+                    "manifest_size": 0
+                },
+                "reachable_direct": true,
+                "reachable_self": false,
+                "reachable_external_count": 1,
+                "reachable_confidence": 0.3333333333333333
+            },
+            {
+                "id": "LibreMesh-Sat-02",
+                "fingerprint": "g4a58RzByzuZnMvAHEdZeAXQRNbz+TsjXl6RB/CKaj8=",
+                "hostname": "192.168.0.163",
+                "port": 8889,
+                "storage_port": 0,
+                "nodes": {},
+                "repair_queue": [],
+                "metrics": {
+                    "cpu_percent": 50.6,
+                    "memory_percent": 34.1,
+                    "memory_available_mb": 7882.0
+                },
+                "zone": "asia-central",
+                "mode": "satellite",
+                "last_seen": 1767700222.788244,
+                "reachable_direct": false,
+                "downstream_count": 0
+            },
+            {
+                "id": "LibreMesh-Sat-03",
+                "fingerprint": "8xcRyvObVxrbIQQzSAq6UkTwXctT7HJz/YHXOyQTOgM=",
+                "hostname": "192.168.0.163",
+                "port": 8890,
+                "storage_port": 0,
+                "nodes": {},
+                "repair_queue": [],
+                "metrics": {
+                    "cpu_percent": 54.8,
+                    "memory_percent": 34.5,
+                    "memory_available_mb": 7832.0
+                },
+                "zone": "oceania-australia",
+                "mode": "satellite",
+                "last_seen": 1767700238.6691108,
+                "reachable_direct": false
             }
         ],
         "repair_nodes": []
     },
-    "signature": "OiENBJYbg9inYK1I/EhgSvjmJxSeXPFlpdi/695m6ewnXbQQT3A7v/XYxeb6OwYz711gV5rdGYPvPAoktUe36SMWn8R/iLQJtm8EfiZuiKxSOQ0q1uky/fk2jH2V4ud1F6x3BnwELKWlpfom3gCUzeve7XYI5aOd9Txev+bDJK/CjgXovoLDoFVtNTivIAIQTbNr0V31JEVsigrpfkWk5os5A2R3qh2eQHHyVUy36iEyPZg75IYlzVcJlUQBolkLvxuVTaCK82LwPxhyGIoobUkyl442qtL5vPpMsDmGQUnt2WAPGOxhA96Qg0aIZd5mWwnbcTn5rQ1tQzlWnpGaRw=="
+    "signature": "Db4x+RWnKgJN9bFv/i32CtyJSSYnyD0t63HvQDApWZ+AIj2F58cU4RITfXdY1tx5oIlnJqzSK8IGTSUyhdj4u+u3y27+JVA8mEXfFqsYb8sgw2RHwtvwGxaKwNgvKCcqHgjyGBjbYU1/V40+YmX4+HRRw9t0eM49vZh9hKjR1wNnlFDiyJ57q9J93webB7RvSptIqNeG8RAU9rBA+Tqz3ikA/avmVUCQyrKn20okXgMTQHWtUSYMrNX4duzF2EQFKJDQmOMXrOKauCekzJVEMLo0w/ulm+z7B7R2GjVihnrLw7nqFBTJCrlXsECOHs3rxP3TV0aix1whypvbVJ8Prw=="
+}
