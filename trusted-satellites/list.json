@@ -8,11 +8,11 @@
                 "port": 8888,
                 "storage_port": 0,
                 "metrics": {
-                    "cpu_percent": 53.5,
-                    "memory_percent": 33.4,
-                    "memory_available_mb": 7968.0
+                    "cpu_percent": 53.6,
+                    "memory_percent": 33.7,
+                    "memory_available_mb": 7934.0
                 },
-                "last_seen": 1767698467.6651242,
+                "last_seen": 1767700041.8242793,
                 "repair_metrics": {
                     "jobs_created": 0,
                     "jobs_completed": 0,
@@ -25,5 +25,4 @@
         ],
         "repair_nodes": []
     },
-    "signature": "mzYOWlmgSlQ/zGVlnOSsfedIWmqWA2mtrT0AxTJNycsvzNxpKirunc+pFiKp2Lq6AeOpn/J9gV829A6sC2U1jsbkYtnuhG0J3jvwLx7kwRT+XJjKOkbOkRoCzhlWvzcWqm759+c9QWpv7QSuO3ZgsHJ+pmbwdkBZ41QKU8H4+fpCnF90M65B5gI8YnEAeYqZ6e/qc7SQBHNkwrv517VS9lVt2z4TVlNmf897407RMHAJDzgkgHyBY/CtKr6bEY0HtyGlD/G6mxy88r56RNINMaXyUszTDWdn/Twn9rbLLYCygs5PQo+Mdbkh2bdF3JNv+w+YybWJudX/kMq7bRd9nw=="
-}
+    "signature": "OiENBJYbg9inYK1I/EhgSvjmJxSeXPFlpdi/695m6ewnXbQQT3A7v/XYxeb6OwYz711gV5rdGYPvPAoktUe36SMWn8R/iLQJtm8EfiZuiKxSOQ0q1uky/fk2jH2V4ud1F6x3BnwELKWlpfom3gCUzeve7XYI5aOd9Txev+bDJK/CjgXovoLDoFVtNTivIAIQTbNr0V31JEVsigrpfkWk5os5A2R3qh2eQHHyVUy36iEyPZg75IYlzVcJlUQBolkLvxuVTaCK82LwPxhyGIoobUkyl442qtL5vPpMsDmGQUnt2WAPGOxhA96Qg0aIZd5mWwnbcTn5rQ1tQzlWnpGaRw=="
