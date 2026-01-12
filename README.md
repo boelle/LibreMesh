@@ -1,4 +1,4 @@
-# 🌐 LibreMesh
+[# 🌐 LibreMesh
 
 ### *Distributed Storage for Fun & Bragging Rights*
 
@@ -617,3 +617,4 @@ Feeders always know *why* they're throttled and what to do about it.
   <a href="https://github.com/yourusername/LibreMesh/issues">🐛 Issues</a> •
   <a href="https://github.com/yourusername/LibreMesh/discussions">💬 Discuss</a>
 </p>
+](https://github.com/boelle/LibreMesh/stargazers)
