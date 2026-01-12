@@ -17,13 +17,17 @@
 
 | Feature | Status | Details |
 |---------|--------|---------|
-| **Architecture** | ✅ Implemented | Satellite mesh with persistent connections |
-| **Erasure Coding** | ✅ Ready | Reed-Solomon k=6, n=10 (survive 4 node failures) |
-| **Repair System** | ✅ Operational | SQLite queue, atomic claiming, auto-reconstruction |
-| **Encryption** | ✅ Ready | Client-side AES-GCM (keys never leave client) |
-| **Monitoring** | ✅ Live | Real-time CPU/mem, repair stats, node health |
-| **Scoring** | ✅ Implemented | 6-factor reputation, proof-of-storage audits, leaderboard |
-| **Geo-Diversity** | ✅ Implemented | 12 zones, min 3-zone spread, 50% per-zone cap |
+| **Architecture** | ✅ Implemented | Satellite mesh with origin authority, persistent connections |
+| **Erasure Coding** | ✅ Operational | Reed-Solomon k=6, n=10 (survive 4 simultaneous node failures) |
+| **Fragment Storage** | ✅ Operational | JSON-RPC put/get/list on all satellites and storage nodes |
+| **Repair System** | ✅ Operational | SQLite queue, atomic claiming, distributed reconstruction |
+| **Encryption** | ✅ Operational | Client-side AES-GCM before fragmentation (keys never leave client) |
+| **Reputation Scoring** | ✅ Operational | 6-factor composite (uptime, reachability, repairs, health, latency, P2P) |
+| **Proof-of-Storage** | ✅ Operational | Nonce-based challenges, distributed auditing every 120s |
+| **Leaderboard** | ✅ Operational | Terminal UI, color-coded tiers (★ Excellent, ● Good, ○ Deprioritized) |
+| **Geographic Diversity** | ✅ Operational | 12 zones, min 3-zone spread, 50% per-zone cap |
+| **Network Monitoring** | ✅ Live | Real-time CPU/mem/latency, repair queue, node health, P2P connectivity |
+| **Security** | ✅ Hardened | TLS fingerprints, signed registry, SHA-256 attestation |
 | **Network Size** | 🔧 Alpha | 2-3 test nodes, targeting 10-20 by Q1 2026 |
 
 ---
@@ -48,7 +52,7 @@
 - 🔄 **Reed-Solomon erasure coding**: Survive multiple node failures (k-of-n recovery)
 - 🚀 **Automatic repair**: Network self-heals when fragments go missing
 - 📡 **Real-time monitoring**: Live CPU/memory stats, repair queue, node health
-- 🌍 **Truly decentralized**: No central authority, community-run
+- 🌍 **Decentralized storage**: Data spread across volunteer satellites/storage nodes; single origin authority for coordination (operator-managed trust anchor)
 
 **What This Is NOT:**
 - ❌ Not a cryptocurrency or blockchain project
@@ -56,10 +60,10 @@
 - ❌ Not a get-rich-quick scheme (zero financial incentives)
 
 **What This IS:**
-- ✅ A fun hobby project for server enthusiasts
-- ✅ A learning platform for distributed systems
-- ✅ A community experiment in voluntary cooperation
-- ✅ A testbed for erasure coding and repair algorithms
+- ✅ A fun hobby project for server enthusiasts with long-term commitment
+- ✅ A learning platform for distributed systems (hands-on education)
+- ✅ A community experiment in voluntary cooperation and competitive participation
+- ✅ A production-grade reference implementation of erasure coding and repair orchestration
 
 ---
 
@@ -188,7 +192,7 @@ LibreMesh uses a **satellite mesh network** with persistent control connections 
 - **Storage**: 2TB+ USB3 HDD for satellite nodes
 - **Network**: Static IP or DDNS recommended
 
-### Option 1: Run Origin Satellite (Network Bootstrap)
+### Setup & Installation
 
 ```bash
 # Clone the repo
@@ -229,8 +233,6 @@ cp satellite_config.json config.json
 nano config.json
 # - Set advertised_ip to your IP
 # - Set network.origin_host to origin's IP
-# - Set network.origin_port to 8888
-
 # Run satellite
 python satellite.py
 ```
@@ -311,7 +313,13 @@ python satellite.py
 
 ### 🏆 Leaderboard & Gamification ✅ OPERATIONAL
 - ✅ **Terminal leaderboard** showing all storage nodes ranked by composite score
-- ✅ **6-factor scoring**: Uptime (15%), Reachability (20%), Repair Avoidance (15%), Repair Success (15%), Disk Health (15%), Latency (20%)
+- ✅ **6-factor scoring** (weighted impact on reputation):
+  * **Uptime** (15%): Continuous runtime, perfect at 30 days
+  * **Reachability** (20%): Successful connection percentage
+  * **Repair Avoidance** (15%): Fewer repairs needed = better
+  * **Repair Success** (15%): More repairs completed = reliable
+  * **Disk Health** (15%): SMART monitoring for hardware reliability
+  * **Latency** (20%): Response time performance (lower is better)
 - ✅ **Color-coded tiers**: ★ Excellent (≥0.80), ● Good (≥0.50), ○ Deprioritized (<0.50)
 - ✅ **Real-time updates**: Live rankings visible on all nodes
 - ✅ **P2P connectivity tracking**: Peer-to-peer reachability bonus
