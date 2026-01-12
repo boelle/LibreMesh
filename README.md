@@ -78,7 +78,6 @@
 **Mid-term (2025-Q2/Q3):**
 - 📈 Grow to 10-20 active nodes
 - 🎮 Launch public leaderboard
-- 📚 Write deployment guides (Pi SD images, Docker)
 - 🌍 Add geographic diversity tracking
 
 **Long-term (2025-Q4+):**
@@ -86,13 +85,14 @@
 - 🏆 Establish competitive teams
 - 📊 Web dashboard for stats/monitoring
 - 🎓 Educational content (workshops, talks)
+- 📚 Write deployment guides (Pi SD images, Docker)
 - 🤝 Community governance model
 
 **Non-Goals:**
 - ❌ Cryptocurrency or tokens
 - ❌ Commercial cloud service
 - ❌ Enterprise SLAs or guarantees
-- ❌ Centralized control or profit motive
+- ❌ Profit motive
 
 ---
 
@@ -124,7 +124,7 @@
 
 ## Features
 
-- Decentralized & open-source
+- Decentralized storage & open-source
 - Encrypted storage
 - Dynamic redundancy with parity
 - Repair system for data integrity
@@ -190,7 +190,7 @@ LibreMesh uses a **satellite mesh network** with persistent control connections 
 - **Real-time sync**: Maintains persistent connections to all satellites
 - **Metrics hub**: Distributes system-wide repair stats to all nodes
 
-### 📡 Satellite Nodes (Repair)
+### 📡 Satellite Nodes
 - **Repair worker**: Claims jobs and reconstructs missing fragments using Reed-Solomon; handles repair overflow when dedicated repair nodes are unavailable or overloaded
 - **Status sync**: Sends heartbeat (when unchanged) or full sync every 30s with TLS encryption
 - **Metrics reporting**: CPU%, memory%, fragment count, repair contributions
@@ -261,35 +261,150 @@ python3 satellite.py
 
 ### What You'll See
 
-**Terminal UI (refreshes every 1 second):**
+**Terminal UIs by Role:**
+
+<details>
+<summary><b>Satellite Node UI</b> (click to expand)</summary>
+
 ```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║ LibreMesh Satellite (Control Plane) - Version 2025.12.21                    ║
-║══════════════════════════════════════════════════════════════════════════════║
-║ Node Identity                                                                ║
-║ - ID: 4a3f7e8c9d...                                                          ║
-║ - Mode: satellite (roles: satellite, storagenode, repairnode)               ║
-║ - Advertised: 192.168.0.163:8888                                            ║
-║ - Fingerprint: SHA256:a3b4c5d6...                                           ║
-║══════════════════════════════════════════════════════════════════════════════║
-║ Online Satellites (2)                                                        ║
-║ ID                  Hostname         Direct  CPU%   Mem%   Last Seen        ║
-║ LibreMesh-Sat-01    192.168.0.163    N/A     2.6    33.8   (this node)     ║
-║ LibreMesh-Sat-02    192.168.0.164    Yes     11.4   34.2   3s ago          ║
-║══════════════════════════════════════════════════════════════════════════════║
-║ Repair Statistics (System-Wide)                                             ║
-║ - Jobs Created: 0                                                            ║
-║ - Jobs Completed: 0                                                          ║
-║ - Jobs Failed: 0                                                             ║
-║ - Fragments Checked: 0                                                       ║
-║ - Last Health Check: Never                                                   ║
-║══════════════════════════════════════════════════════════════════════════════║
-║ Notifications (last 9)                                                       ║
-║ [12:34:56] Connected to origin                                               ║
-║ [12:34:55] Connecting to origin 192.168.0.163:8888...                       ║
-║ [12:34:50] Satellite initialized (mode: satellite)                          ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+==============================================================================
+                            LibreMesh Home
+==============================================================================
+
+Satellite ID:       LibreMesh-Sat-01
+Advertising IP:     192.168.0.163:8888
+Node Role:          SATELLITE
+TLS Fingerprint:    SHA256:a3b4c5d6e7f8...
+Registry Source:    LIVE (updated 12s ago)
+
+Trusted Satellites:     3
+Trusted Repair Nodes:   2
+
+Storage Nodes:          8
+
+Satellites:             3/3 online
+Repair Nodes:           2/2 online
+
+Repair Queue:           0 jobs
+Deletion Queue:         0 jobs
+
+CPU: 5.2%  |  Memory: 248.5 MB (41.2%)  |  Uptime: 2d 4h 23m
+
+==============================================================================
+Navigation: [H]ome | [S]atellites | [N]odes | [R]epair | [L]ogs | [Q]uit
+==============================================================================
 ```
+*Interactive curses UI with keyboard navigation between screens.*
+
+</details>
+
+<details>
+<summary><b>Storage Node UI</b> (click to expand)</summary>
+
+```
+==============================================================================
+                          Storage Node Home
+==============================================================================
+
+Node ID:            LibreMesh-Storage-03
+Zone:               US-West-A
+Storage Port:       9889
+Storage Path:       /mnt/usb/fragments
+TLS Fingerprint:    SHA256:b2c3d4e5f6...
+
+Connection Status:  CONNECTED (last heartbeat: 8s ago)
+Origin Server:      192.168.0.163:8888
+
+Storage Capacity:   127.34 / 1800.00 GB (7.07%)
+Fragment Count:     14,523 fragments
+Disk Health:        HEALTHY (1.00)
+
+Performance Metrics:
+  Uptime:           5d 12h 34m
+  Reputation Score: 0.87 (★ Excellent)
+  Response Latency: 42ms avg
+  Repairs Completed: 23
+  Audits Passed:    1,234 / 1,234 (100%)
+
+CPU: 2.1%  |  Memory: 89.2 MB (14.3%)
+
+==============================================================================
+Navigation: [H]ome | [V]iewerboard | [L]ogs | [Q]uit
+==============================================================================
+```
+*Lightweight UI showing storage metrics and performance.*
+
+</details>
+
+<details>
+<summary><b>Repair Node UI</b> (click to expand)</summary>
+
+```
+==============================================================================
+                            LibreMesh Home
+==============================================================================
+
+Satellite ID:       LibreMesh-Repair-01
+Advertising IP:     192.168.0.164:8888
+Node Role:          REPAIR_NODE
+TLS Fingerprint:    SHA256:c4d5e6f7g8...
+Registry Source:    LIVE (updated 5s ago)
+
+Trusted Satellites:     3
+Trusted Repair Nodes:   2
+
+Storage Nodes:          8
+
+Satellites:             3/3 online
+Repair Nodes:           2/2 online
+
+Repair Queue:           3 jobs (2 claimed by this node)
+Deletion Queue:         0 jobs
+
+Repair Performance:
+  Jobs Completed:       156 (today: 8)
+  Success Rate:         98.7%
+  Avg Reconstruct Time: 4.2s
+
+CPU: 8.3%  |  Memory: 156.8 MB (26.1%)  |  Uptime: 1d 18h 45m
+
+==============================================================================
+Navigation: [H]ome | [R]epair | [L]ogs | [Q]uit
+==============================================================================
+```
+*Focused on repair job claiming and reconstruction metrics.*
+
+</details>
+
+<details>
+<summary><b>Feeder UI</b> (click to expand)</summary>
+
+```
+==============================================================================
+                        Feeder Upload Guard
+==============================================================================
+Status: OPERATIONAL - uploads allowed
+Unprotected usage: 234.5MB / 5120.0MB
+Grace remaining before auto-pause: 3600s
+
+Storage Nodes Online: 8/8
+Average Response Latency: 38ms
+Last Upload: file_abc123.dat (2.4MB) - SUCCESS (12s ago)
+Fragments Placed: 10/10 (k=6, n=10)
+  Zone Distribution: US-West: 3, EU-Central: 4, Asia-Pacific: 3
+
+Recent Activity:
+  [14:23:45] Uploaded: report.pdf (1.2MB) → 10 fragments
+  [14:18:32] Uploaded: image.jpg (450KB) → 10 fragments
+  [14:12:01] Retrieved: backup.tar.gz (8.3MB)
+
+==============================================================================
+Commands: [U]pload | [D]ownload | [L]ist files | [Q]uit
+==============================================================================
+```
+*Simplified UI for file operations and upload status.*
+
+</details>
 
 ---
 
