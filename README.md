@@ -22,8 +22,8 @@
 | **Repair System** | ✅ Operational | SQLite queue, atomic claiming, auto-reconstruction |
 | **Encryption** | ✅ Ready | Client-side AES-GCM (keys never leave client) |
 | **Monitoring** | ✅ Live | Real-time CPU/mem, repair stats, node health |
-| **Scoring** | 🚧 In Progress | Task 8-11 (auditor, reputation, leaderboard) |
-| **Geo-Diversity** | 📋 Planned | Task 13 (12 zones, placement rules) |
+| **Scoring** | ✅ Implemented | 6-factor reputation, proof-of-storage audits, leaderboard |
+| **Geo-Diversity** | ✅ Implemented | 12 zones, min 3-zone spread, 50% per-zone cap |
 | **Network Size** | 🔧 Alpha | 2-3 test nodes, targeting 10-20 by Q1 2026 |
 
 ---
@@ -65,7 +65,7 @@
 
 ## Key Concepts
 
-### Node
+### Storage Node
 - Single physical storage device.
 - Stores encrypted fragments.
 - Reports metrics to satellites.
@@ -290,12 +290,13 @@ python satellite.py
 - [x] **Hybrid node mode** (satellite+storagenode+repairnode on one host)
 - [x] **External configuration** (JSON config files, publishable code)
 - [x] **Terminal UI** (real-time dashboard with notifications)
+- [x] **Storagenode auditor & scoring** (distributed auditing, latency/success tracking)
+- [x] **Proof-of-storage challenges** (nonce-based integrity audits without full transfer)
+- [x] **Reputation & ranking system** (6-factor composite scoring: uptime, reachability, repairs, health, latency, P2P)
+- [x] **Public leaderboard** (terminal UI with rankings, tiers, competitive participation)
+- [x] **Geographic diversity** (12 zones, min 3-zone spread, 50% per-zone cap)
 
 **🚧 In Progress (Next Sessions):**
-- [ ] **Storagenode auditor & scoring** (Task 8) - latency/success tracking
-- [ ] **Proof-of-storage challenges** (Task 9) - integrity audits without full transfer
-- [ ] **Reputation & ranking system** (Task 10) - 6-factor composite scoring
-- [ ] **Public leaderboard** (Task 11) - competitive participation
 
 **📋 Roadmap (Jan 2026):**
 - [ ] **Storagenode onboarding** (Task 12) - join handshake, health checks, graceful drain
@@ -308,29 +309,32 @@ python satellite.py
 
 ## 📊 Planned Features (Coming Soon)
 
-### 🏆 Leaderboard & Gamification
-- **Public stats dashboard** showing top nodes by:
-  - Uptime percentage (long-running nodes)
-  - Repair contributions (fragments reconstructed)
-  - Response latency (fastest nodes)
-  - Storage capacity contributed
-  - Composite reputation score
-- **Team competitions** (operator-defined teams)
-- **Badges & achievements** (milestones: 99.9% uptime, 1000 repairs, etc.)
-- **Historical graphs** (node performance over time)
+### 🏆 Leaderboard & Gamification ✅ OPERATIONAL
+- ✅ **Terminal leaderboard** showing all storage nodes ranked by composite score
+- ✅ **6-factor scoring**: Uptime (15%), Reachability (20%), Repair Avoidance (15%), Repair Success (15%), Disk Health (15%), Latency (20%)
+- ✅ **Color-coded tiers**: ★ Excellent (≥0.80), ● Good (≥0.50), ○ Deprioritized (<0.50)
+- ✅ **Real-time updates**: Live rankings visible on all nodes
+- ✅ **P2P connectivity tracking**: Peer-to-peer reachability bonus
+- 📋 **Team competitions** (planned - operator-defined teams)
+- 📋 **Badges & achievements** (planned - milestones: 99.9% uptime, 1000 repairs, etc.)
+- 📋 **Web dashboard** (planned - historical graphs, node performance over time)
 
-### 🔍 Proof-of-Storage Audits
-- **Random fragment challenges** with nonce
-- **Checksum verification** without full transfer
-- **Audit logging** for reputation tracking
-- **Penalties for failures** (score reduction, job deprioritization)
-- **Spot checks** (occasional full fragment fetch)
+### 🔍 Proof-of-Storage Audits ✅ OPERATIONAL
+- ✅ **Random fragment challenges** with nonce-based protocol
+- ✅ **Checksum verification** without full transfer (detect missing/corrupt fragments)
+- ✅ **Audit logging** for reputation tracking (deque maxlen=100)
+- ✅ **Distributed auditing**: Origin creates tasks, satellites execute (Task 20a)
+- ✅ **Automatic penalties**: Score reduction for failures, job deprioritization
+- ✅ **Every 120s audit cycle**: Configurable interval, CPU threshold protection
 
-### 📍 Geographic Diversity
-- **12 fault domains** (NA-East, NA-West, Europe, Asia, etc.)
-- **Placement rules**: min 3 zones per object
-- **Latency-aware selection** (prefer nearby when diversity satisfied)
-- **Rack/operator diversity** (avoid correlated failures)
+### 📍 Geographic Diversity ✅ OPERATIONAL
+- ✅ **12 fault domains**: us-east, us-central, eu-west, eu-central, eu-east, asia-east, asia-south, asia-central, africa-west, africa-east, oceania, south-america-*
+- ✅ **Placement rules**: Configurable min zones (default: 3), per-zone cap (default: 50%)
+- ✅ **Country-to-zone mapping**: 195+ countries mapped via country_zones.json
+- ✅ **Even-fill balancing**: Prefer lowest fill percentage across zones
+- ✅ **Score-driven selection**: High-reputation nodes preferred within zone constraints
+- 📋 **MaxMind GeoIP integration** (config ready, awaiting operator API key)
+- 📋 **Rack/operator diversity** (planned - avoid correlated failures)
 
 ### 🎯 Smart Scheduling
 - **Score-driven assignment** (high-reputation nodes preferred)
