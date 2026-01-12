@@ -122,18 +122,6 @@
 
 ---
 
-## Features
-
-- Decentralized storage & open-source
-- Encrypted storage
-- Dynamic redundancy with parity
-- Repair system for data integrity
-- Automatic discovery
-- Headless operation with optional attachment
-- Minimal logging for efficiency and privacy
-
----
-
 ## 🏗️ Architecture
 
 LibreMesh uses a **satellite mesh network** with persistent control connections and distributed repair orchestration:
@@ -408,12 +396,29 @@ Commands: [U]pload | [D]ownload | [L]ist files | [Q]uit
 
 ---
 
-
----
-
 ## 🛠️ Configuration
 
 Configs are self-documented in the templates. Start from these and edit your node details (name, advertised_ip, origin_host/port, storage_port): [origin_config.json](origin_config.json), [satellite_config.json](satellite_config.json), [hybrid_config.json](hybrid_config.json).
+
+---
+
+## 📜 License
+
+LibreMesh is licensed under **GNU AGPLv3**.
+
+**What this means:**
+- ✅ Free to use, modify, and distribute
+- ✅ Must keep source open (even for network services)
+- ✅ Must share modifications under same license
+- ❌ Cannot make proprietary forks
+- ❌ No warranty (use at own risk)
+
+**Why AGPL?**
+- Ensures the project stays open and community-driven
+- Prevents commercial cloud providers from taking without contributing back
+- Aligns with Folding@home / BOINC philosophy (community-first)
+
+Full license: [LICENSE](LICENSE)
 
 ---
 
@@ -440,26 +445,6 @@ LibreMesh is in **active development** (alpha stage). Contributions welcome!
 - GitHub Issues for bugs and features
 - Discussions for architecture questions
 - (Future: Discord/Matrix for community chat)
-
----
-
-## 📜 License
-
-LibreMesh is licensed under **GNU AGPLv3**.
-
-**What this means:**
-- ✅ Free to use, modify, and distribute
-- ✅ Must keep source open (even for network services)
-- ✅ Must share modifications under same license
-- ❌ Cannot make proprietary forks
-- ❌ No warranty (use at own risk)
-
-**Why AGPL?**
-- Ensures the project stays open and community-driven
-- Prevents commercial cloud providers from taking without contributing back
-- Aligns with Folding@home / BOINC philosophy (community-first)
-
-Full license: [LICENSE](LICENSE)
 
 ---
 
@@ -522,7 +507,7 @@ A: Client-side AES-GCM before fragmentation. Keys never leave the client.
 A: Doesn't matter - they only see encrypted fragments. Integrity is checked via checksums.
 
 **Q: How do I climb the leaderboard?**  
-A: Keep your node online, complete repairs, respond quickly to challenges. (Coming in Task 11)
+A: Keep your node online, complete repairs, respond quickly to challenges.
 
 **Q: Is there a GUI?**  
 A: Minimal terminal UI with live leaderboard, repair stats, and node health. Web dashboard planned later.
@@ -534,10 +519,10 @@ A: Yes! Use hybrid mode: `"roles": ["satellite", "storagenode", "repairnode"]`
 A: Recommend 4+ nodes minimum for production (1 origin + 3 satellites/storage nodes). For testing: k=2, n=3 (2 data, 1 parity) on 3-4 local nodes.
 
 **Q: What about spam and abuse?**  
-A: LibreMesh uses pattern recognition to detect automated abuse. Instead of blocking, suspicious feeders are throttled (slowed down), making attacks tedious. Patterns detected: duplicate files (5+ uploads), upload/delete churn (>80% deleted within 1hr), storage amplification (1000+ tiny files), rate limit assault (sustained max rate), robotic intervals (exact timing), and rapid micro-changes (fuzzing patterns). Throttling is transparent—feeders see their spam score (0-10) and reason in every response. First offense resets after 24h; repeat offenders escalate to harder throttling.
+A: LibreMesh uses behavioral pattern recognition to throttle (not block) suspicious activity. We monitor for automated abuse patterns like repetitive operations, rapid churn, and robotic timing. Normal human usage won't trigger it. Throttling is transparent—all RPC responses include your spam score (0-10) and explanation. First offense resets after 24h; repeat patterns escalate. The system is designed to bore attackers, not frustrate legitimate users.
 
 **Q: What if I'm throttled by mistake?**  
-A: All RPC responses show your spam score and why you're throttled. Normal usage won't trigger it. If you need high-volume uploads (backups, batch jobs), contact the network operator for whitelisting. Throttling resets automatically after 24h of clean activity.
+A: All RPC responses show your spam score and why you're throttled. Normal usage won't trigger it. If legitimate high-volume activity (backups, batch jobs) gets flagged, contact the network operator for whitelisting. Throttling resets automatically after 24h of clean activity.
 
 ---
 
