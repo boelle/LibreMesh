@@ -1,4 +1,4 @@
-[# 🌐 LibreMesh
+# 🌐 LibreMesh
 
 ### *Distributed Storage for Fun & Bragging Rights*
 
@@ -533,77 +533,11 @@ A: Yes! Use hybrid mode: `"roles": ["satellite", "storagenode", "repairnode"]`
 **Q: What's the minimum network size?**  
 A: Recommend 4+ nodes minimum for production (1 origin + 3 satellites/storage nodes). For testing: k=2, n=3 (2 data, 1 parity) on 3-4 local nodes.
 
----
+**Q: What about spam and abuse?**  
+A: LibreMesh uses pattern recognition to detect automated abuse. Instead of blocking, suspicious feeders are throttled (slowed down), making attacks tedious. Patterns detected: duplicate files (5+ uploads), upload/delete churn (>80% deleted within 1hr), storage amplification (1000+ tiny files), rate limit assault (sustained max rate), robotic intervals (exact timing), and rapid micro-changes (fuzzing patterns). Throttling is transparent—feeders see their spam score (0-10) and reason in every response. First offense resets after 24h; repeat offenders escalate to harder throttling.
 
-## 🚨 Spam Detection & Fair Play
-
-LibreMesh includes automated spam detection to protect the network from abuse. The system uses pattern recognition rather than punishment—suspicious feeders are throttled (slowed down) rather than blocked, boring attackers into giving up.
-
-### Spam Detection Patterns
-
-We monitor for these patterns, which indicate automated abuse rather than legitimate user behavior:
-
-#### 1. **Duplicate File Abuse**
-- **Pattern**: Same file (identical checksum) uploaded 5+ times
-- **Why**: Normal users don't re-upload the same file repeatedly. This pattern suggests testing fragmentation or storage limits.
-- **Response**: Uploads throttled; feeder warned in RPC response
-
-#### 2. **Upload/Delete Churn**
-- **Pattern**: >80% of uploads deleted within 1 hour of upload
-- **Why**: Legitimate users keep files; this pattern wastes storage and tests retention logic.
-- **Response**: Operations throttled; feeder warned
-
-#### 3. **Storage Amplification Attack**
-- **Pattern**: 1000+ objects stored with average size <10KB
-- **Why**: Real data has realistic file sizes; 1000s of tiny objects indicates payload testing.
-- **Response**: Uploads throttled; feeder warned
-
-#### 4. **Rate Limit Assault**
-- **Pattern**: Sustained requests at max rate (60/min) for >30 minutes straight
-- **Why**: Humans vary usage; constant maximum-rate indicates scripted attack.
-- **Response**: Throttled to 20/min; feeder notified of throttle duration
-
-#### 5. **Robotic Upload Pattern**
-- **Pattern**: Exact same interval between uploads (±5 seconds) for 10+ uploads
-- **Why**: Humans are inconsistent; machines are predictably regular.
-- **Response**: Uploads throttled; feeder warned
-
-#### 6. **Rapid Micro-Changes**
-- **Pattern**: Same filename re-uploaded with 1-10 byte changes 10+ times in <1 hour
-- **Why**: Indicates fuzzing or testing attack surface, not normal file management.
-- **Response**: Uploads throttled; feeder warned
-
-### How "Boring" Works
-
-Instead of blocking, we throttle suspected spammers:
-- **Score 5-6**: Warning sent in RPC response; logging enabled
-- **Score 8+**: 5-10 second delays added to operations (tedious for bots, suspicious to humans)
-- **Per-IP tracking**: Score resets after 24 hours of clean activity
-- **Repeat offense**: If same IP shows spam patterns within 7 days, escalates to harder throttling
-- **Operator control**: Network operators can whitelist known power-users or batch jobs
-
-### Transparency for Feeders
-
-All RPC responses include:
-```json
-{
-  "status": "ok",
-  "spam_score": 0-10,            // 0=clean, 5+=warning, 8+=throttled
-  "warning_reason": "string",     // Human-readable explanation
-  "throttle_duration_seconds": 0, // How long this operation is delayed
-  "suggestion": "string"          // How to avoid throttling
-}
-```
-
-Feeders always know *why* they're throttled and what to do about it.
-
-### Fair Play Principles
-
-- ✅ **Transparent**: No silent blocking; always explain the pattern detected
-- ✅ **Recoverable**: First offense resets after 24h clean behavior
-- ✅ **Graduated**: Repeat offenders escalate to harder throttling, not instant ban
-- ✅ **Preventable**: Published rules let legitimate power-users configure safely
-- ✅ **Human-friendly**: Designed to bore bots, not frustrate humans
+**Q: What if I'm throttled by mistake?**  
+A: All RPC responses show your spam score and why you're throttled. Normal usage won't trigger it. If you need high-volume uploads (backups, batch jobs), contact the network operator for whitelisting. Throttling resets automatically after 24h of clean activity.
 
 ---
 
@@ -613,8 +547,7 @@ Feeders always know *why* they're throttled and what to do about it.
 </p>
 
 <p align="center">
-  <a href="https://github.com/yourusername/LibreMesh/stargazers">⭐ Star</a> •
-  <a href="https://github.com/yourusername/LibreMesh/issues">🐛 Issues</a> •
-  <a href="https://github.com/yourusername/LibreMesh/discussions">💬 Discuss</a>
+  <a href="https://github.com/boelle/LibreMesh/stargazers">⭐ Star</a> •
+  <a href="https://github.com/boelle/LibreMesh/issues">🐛 Issues</a> •
+  <a href="https://github.com/boelle/LibreMesh/discussions">💬 Discuss</a>
 </p>
-](https://github.com/boelle/LibreMesh/stargazers)
