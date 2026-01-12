@@ -67,6 +67,35 @@
 
 ---
 
+## 🎯 Project Goals
+
+**Short-term (2025-Q1):**
+- ✅ Finish core repair orchestration
+- ✅ Complete storagenode lifecycle
+- ✅ Ship tests and documentation
+- 🎉 **Launch alpha network** (3-5 nodes)
+
+**Mid-term (2025-Q2/Q3):**
+- 📈 Grow to 10-20 active nodes
+- 🎮 Launch public leaderboard
+- 📚 Write deployment guides (Pi SD images, Docker)
+- 🌍 Add geographic diversity tracking
+
+**Long-term (2025-Q4+):**
+- 🚀 Scale to 50-100 nodes
+- 🏆 Establish competitive teams
+- 📊 Web dashboard for stats/monitoring
+- 🎓 Educational content (workshops, talks)
+- 🤝 Community governance model
+
+**Non-Goals:**
+- ❌ Cryptocurrency or tokens
+- ❌ Commercial cloud service
+- ❌ Enterprise SLAs or guarantees
+- ❌ Centralized control or profit motive
+
+---
+
 ## Key Concepts
 
 ### Storage Node
@@ -119,25 +148,25 @@ LibreMesh uses a **satellite mesh network** with persistent control connections 
                             │  Persistent      │
                             │  bidirectional   │
                             │  control sync    │
+                            │  (TLS encrypted) │
          ┌──────────────────┴─────┐    ┌──────┴──────────────────┐
          │                        │    │                         │
     ┌────▼────────┐          ┌────▼────▼───┐          ┌─────────▼────┐
     │  Satellite  │◄─ Sync ─►│  Satellite  │◄─ Sync ─►│  Satellite   │
     │   Node 1    │          │   Node 2    │          │   Node 3     │
     │             │          │             │          │              │
-    │  • Storage  │          │  • Storage  │          │  • Storage   │
     │  • Repair   │          │  • Repair   │          │  • Repair    │
     │  • Metrics  │          │  • Metrics  │          │  • Metrics   │
     └─────┬───────┘          └──────┬──────┘          └──────┬───────┘
           │                         │                        │
-          │ Storage RPC             │ Storage RPC            │ Storage RPC
-          │ (Port 9889)             │ (Port 9889)            │ (Port 9889)
+          │ Fragment Storage RPC    │ Fragment Storage RPC   │ Fragment Storage RPC
+          │ (TLS encrypted)         │ (TLS encrypted)        │ (TLS encrypted)
           │                         │                        │
     ┌─────▼─────────────────────────▼────────────────────────▼──────┐
     │                Storage Nodes (Pure Storage)                    │
-    │  • Lightweight - no control port, no UI                        │
+    │  • Lightweight - no control port, minimal interface            │
     │  • Reports metrics via heartbeat to Origin                     │
-    │  • P2P connectivity testing (Task 24)                          │
+    │  • P2P connectivity testing between peers                      │
     └────────────────────────────────────────────────────────────────┘
           │                         │                        │
     ┌─────▼─────┐             ┌─────▼─────┐          ┌─────▼─────┐
@@ -161,10 +190,9 @@ LibreMesh uses a **satellite mesh network** with persistent control connections 
 - **Real-time sync**: Maintains persistent connections to all satellites
 - **Metrics hub**: Distributes system-wide repair stats to all nodes
 
-### 📡 Satellite Nodes (Storage + Repair)
-- **Fragment storage**: Serves put/get/list RPCs on storage port (9889)
-- **Repair worker**: Claims jobs, reconstructs missing fragments using Reed-Solomon
-- **Status sync**: Sends heartbeat (when unchanged) or full sync every 30s
+### 📡 Satellite Nodes (Repair)
+- **Repair worker**: Claims jobs and reconstructs missing fragments using Reed-Solomon; handles repair overflow when dedicated repair nodes are unavailable or overloaded
+- **Status sync**: Sends heartbeat (when unchanged) or full sync every 30s with TLS encryption
 - **Metrics reporting**: CPU%, memory%, fragment count, repair contributions
 - **Auto-reconnect**: Exponential backoff to origin if connection drops
 
@@ -177,10 +205,12 @@ LibreMesh uses a **satellite mesh network** with persistent control connections 
 
 ### 🔐 Security Model
 - **Client-side encryption**: AES-GCM before fragmentation (keys never leave client)
-- **TLS fingerprints**: Node identity from cert SHA-256
+- **Transport layer encryption**: All connections between nodes use TLS; network traffic is encrypted and cannot be eavesdropped 
+- **Pre-flight encryption**: Feeders encrypt data before sending to satellites (double encryption: application + transport)
+- **TLS fingerprints**: Node identity verified via certificate SHA-256 attestation
 - **Signed registry**: Origin signs satellite list with RSA-4096
 - **GitHub trust anchor**: Origin public key distributed via GitHub
-- **No authentication**: Read-only fragments (integrity via checksums, privacy via encryption)
+- **No authentication required**: Fragments are read-only and encrypted; integrity verified via checksums only
 
 ---
 
@@ -195,35 +225,22 @@ LibreMesh uses a **satellite mesh network** with persistent control connections 
 ### Setup & Installation
 
 ```bash
-# Clone the repo
-git clone https://github.com/yourusername/LibreMesh.git
-cd LibreMesh
+# Download the essential files
+wget https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/satellite.py
+wget https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/requirements.txt
+wget https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/satellite_config.json
 
 # Install dependencies
-pip install -r requirements.txt
+apt-get install -y python3-cryptography python3-zfec python3-psutil python3-requests python3-geoip2
 
-### Dependency rationale
-- `cryptography` (required): TLS certs, fingerprints, RSA, AES-GCM. Do **not** remove or replace—security-critical and constant-time implementations.
-- `zfec` (preferred): Fast erasure coding, but needs a C toolchain to install. If you’re on a minimal system, install build-essential/clang first. We’re skipping the pure-Python fallback for now to keep performance high.
-- `psutil` (optional): CPU/memory metrics. If missing, metrics simply show N/A (no breakage).
-- `typing_extensions` (removed): Python 3.8+ ships `TypedDict` in stdlib; no backport needed.
+**Dependencies** (5 packages):
+- `cryptography` (❗ required): TLS certificates, fingerprints, RSA, AES-GCM encryption  
+- `zfec` (❗ required): Reed-Solomon erasure coding (needs C toolchain: gcc/clang)
+- `psutil` (optional): CPU/memory metrics (shows N/A if missing)
+- `geoip2` (optional): Geographic zone detection (requires MaxMind account)
+- `requests` (optional): HTTP client for GitHub registry fetching
 
-# Copy origin config template
-cp origin_config.json config.json
-
-# Edit config.json (set your IP address)
-nano config.json  # Change advertised_ip to your public/local IP
-
-# Run origin
-python satellite.py
-```
-
-**Origin provides:**
-- Control port: 8888 (satellite sync)
-- Repair RPC: 7888 (job coordination)
-- No storage port (origin is control-only)
-
-### Option 2: Run Satellite Node (Join Network)
+### Run a Satellite Node (Join Network)
 
 ```bash
 # Same setup as above, but use satellite config
@@ -234,7 +251,7 @@ nano config.json
 # - Set advertised_ip to your IP
 # - Set network.origin_host to origin's IP
 # Run satellite
-python satellite.py
+python3 satellite.py
 ```
 
 **Satellite provides:**
@@ -276,166 +293,12 @@ python satellite.py
 
 ---
 
-## 🎮 Current Features (Alpha)
-
-**✅ Implemented:**
-- [x] **Satellite mesh network** with origin authority
-- [x] **Persistent bidirectional connections** (real-time metrics, command potential)
-- [x] **Repair job orchestration** with SQLite queue and atomic claiming
-- [x] **Fragment health monitoring** (placeholder, needs actual object scanning)
-- [x] **Repair worker** (claims jobs, placeholder reconstruction logic)
-- [x] **Reed-Solomon encoding/decoding** (zfec-based, k=6 n=10)
-- [x] **Storage RPC** (put/get/list fragments via JSON-RPC)
-- [x] **Client-side encryption** (AES-GCM helpers ready)
-- [x] **Status sync efficiency** (heartbeat mode, ETag caching)
-- [x] **CPU/Memory monitoring** (psutil integration, live UI display)
-- [x] **Hybrid node mode** (satellite+storagenode+repairnode on one host)
-- [x] **External configuration** (JSON config files, publishable code)
-- [x] **Terminal UI** (real-time dashboard with notifications)
-- [x] **Storagenode auditor & scoring** (distributed auditing, latency/success tracking)
-- [x] **Proof-of-storage challenges** (nonce-based integrity audits without full transfer)
-- [x] **Reputation & ranking system** (6-factor composite scoring: uptime, reachability, repairs, health, latency, P2P)
-- [x] **Public leaderboard** (terminal UI with rankings, tiers, competitive participation)
-- [x] **Geographic diversity** (12 zones, min 3-zone spread, 50% per-zone cap)
-
-**🚧 In Progress (Next Sessions):**
-
-**📋 Roadmap (Jan 2026):**
-- [ ] **Storagenode onboarding** (Task 12) - join handshake, health checks, graceful drain
-- [ ] **Placement & scheduling** (Task 13) - geo-awareness, diversity, even-fill
-- [ ] **Versioning & GC** (Task 14) - object versions, retention policies, safe reclaim
-- [ ] **Tests & documentation** (Task 15) - unit tests, security tests, README-dev.md
-- [ ] **Dependency reduction** (Task 16) - pure-Python fallbacks, bundling
-
----
-
-## 📊 Planned Features (Coming Soon)
-
-### 🏆 Leaderboard & Gamification ✅ OPERATIONAL
-- ✅ **Terminal leaderboard** showing all storage nodes ranked by composite score
-- ✅ **6-factor scoring** (weighted impact on reputation):
-  * **Uptime** (15%): Continuous runtime, perfect at 30 days
-  * **Reachability** (20%): Successful connection percentage
-  * **Repair Avoidance** (15%): Fewer repairs needed = better
-  * **Repair Success** (15%): More repairs completed = reliable
-  * **Disk Health** (15%): SMART monitoring for hardware reliability
-  * **Latency** (20%): Response time performance (lower is better)
-- ✅ **Color-coded tiers**: ★ Excellent (≥0.80), ● Good (≥0.50), ○ Deprioritized (<0.50)
-- ✅ **Real-time updates**: Live rankings visible on all nodes
-- ✅ **P2P connectivity tracking**: Peer-to-peer reachability bonus
-- 📋 **Team competitions** (planned - operator-defined teams)
-- 📋 **Badges & achievements** (planned - milestones: 99.9% uptime, 1000 repairs, etc.)
-- 📋 **Web dashboard** (planned - historical graphs, node performance over time)
-
-### 🔍 Proof-of-Storage Audits ✅ OPERATIONAL
-- ✅ **Random fragment challenges** with nonce-based protocol
-- ✅ **Checksum verification** without full transfer (detect missing/corrupt fragments)
-- ✅ **Audit logging** for reputation tracking (deque maxlen=100)
-- ✅ **Distributed auditing**: Origin creates tasks, satellites execute (Task 20a)
-- ✅ **Automatic penalties**: Score reduction for failures, job deprioritization
-- ✅ **Every 120s audit cycle**: Configurable interval, CPU threshold protection
-
-### 📍 Geographic Diversity ✅ OPERATIONAL
-- ✅ **12 fault domains**: us-east, us-central, eu-west, eu-central, eu-east, asia-east, asia-south, asia-central, africa-west, africa-east, oceania, south-america-*
-- ✅ **Placement rules**: Configurable min zones (default: 3), per-zone cap (default: 50%)
-- ✅ **Country-to-zone mapping**: 195+ countries mapped via country_zones.json
-- ✅ **Even-fill balancing**: Prefer lowest fill percentage across zones
-- ✅ **Score-driven selection**: High-reputation nodes preferred within zone constraints
-- 📋 **MaxMind GeoIP integration** (config ready, awaiting operator API key)
-- 📋 **Rack/operator diversity** (planned - avoid correlated failures)
-
-### 🎯 Smart Scheduling
-- **Score-driven assignment** (high-reputation nodes preferred)
-- **Even-fill balancing** (avoid hot spots)
-- **Per-feeder throttling** (adaptive rate limits)
-- **Global backpressure** (slow everyone when capacity low)
 
 ---
 
 ## 🛠️ Configuration
 
-Settings are externalized in `config.json`. Templates provided:
-
-### Origin Config (`origin_config.json`)
-```json
-{
-  "node": {
-    "mode": "origin",
-    "name": "LibreMesh-Origin",
-    "advertised_ip": "192.168.0.163"
-  },
-  "network": {
-    "listen_host": "0.0.0.0",
-    "listen_port": 8888,
-    "storage_port": 0,
-    "repair_rpc_port": 7888
-  },
-  "sync": {
-    "node_sync_interval": 30,
-    "registry_sync_interval": 300
-  }
-}
-```
-
-### Satellite Config (`satellite_config.json`)
-```json
-{
-  "node": {
-    "mode": "hybrid",
-    "roles": ["satellite", "storagenode", "repairnode"],
-    "name": "LibreMesh-Sat-01",
-    "advertised_ip": "192.168.0.164"
-  },
-  "network": {
-    "listen_host": "0.0.0.0",
-    "listen_port": 8888,
-    "storage_port": 9889,
-    "origin_host": "192.168.0.163",
-    "origin_port": 8888
-  },
-  "limits": {
-    "max_concurrent_connections": 100,
-    "connection_rate_limit": 10,
-    "connection_timeout_seconds": 300,
-    "max_repair_bandwidth_mbps": 0,
-    "log_level": "INFO"
-  }
-}
-```
-
-### Logging Configuration
-
-LibreMesh uses structured JSON logging to three separate log files:
-- `logs/control.log`: Control plane events (connections, registry, sync)
-- `logs/repair.log`: Repair worker events (jobs, claims, completions)
-- `logs/storage.log`: Storage operations (fragments, audits, P2P)
-
-**Log Levels** (set in `config.json` under `limits.log_level`):
-- `DEBUG`: Verbose output (probes, heartbeats, all operations)
-- `INFO`: Normal operation (connections, repairs, important events) - **Default**
-- `WARNING`: Warnings and degraded states
-- `ERROR`: Errors and failures
-- `CRITICAL`: Critical failures requiring attention
-
-**Features:**
-- Automatic log rotation (10MB per file, 5 backups = 50MB total per logger)
-- JSON format for machine parsing and log aggregation
-- Command-line override: `python satellite.py --log-level DEBUG`
-- Per-node configuration: Set different log levels for origin/satellites/storagenodes
-
-**Example:**
-```bash
-# Run with debug logging (override config)
-python satellite.py --log-level DEBUG
-
-# Check logs
-tail -f logs/control.log | jq .
-```
-
-**Config validation:**
-- Invalid modes raise clear errors at startup
-- Missing config.json uses sensible defaults
-- Operator-specific settings never committed to git
+Configs are self-documented in the templates. Start from these and edit your node details (name, advertised_ip, origin_host/port, storage_port): [origin_config.json](origin_config.json), [satellite_config.json](satellite_config.json), [hybrid_config.json](hybrid_config.json).
 
 ---
 
@@ -523,35 +386,6 @@ Full license: [LICENSE](LICENSE)
 
 ---
 
-## 🎯 Project Goals
-
-**Short-term (2025-Q1):**
-- ✅ Finish core repair orchestration (Tasks 8-11)
-- ✅ Complete storagenode lifecycle (Tasks 12-14)
-- ✅ Ship tests and documentation (Task 15-16)
-- 🎉 **Launch alpha network** (3-5 nodes)
-
-**Mid-term (2025-Q2/Q3):**
-- 📈 Grow to 10-20 active nodes
-- 🎮 Launch public leaderboard
-- 📚 Write deployment guides (Pi SD images, Docker)
-- 🌍 Add geographic diversity tracking
-
-**Long-term (2025-Q4+):**
-- 🚀 Scale to 50-100 nodes
-- 🏆 Establish competitive teams
-- 📊 Web dashboard for stats/monitoring
-- 🎓 Educational content (workshops, talks)
-- 🤝 Community governance model
-
-**Non-Goals:**
-- ❌ Cryptocurrency or tokens
-- ❌ Commercial cloud service
-- ❌ Enterprise SLAs or guarantees
-- ❌ Centralized control or profit motive
-
----
-
 ## ❓ FAQ
 
 **Q: Is this production-ready?**  
@@ -576,13 +410,13 @@ A: Doesn't matter - they only see encrypted fragments. Integrity is checked via 
 A: Keep your node online, complete repairs, respond quickly to challenges. (Coming in Task 11)
 
 **Q: Is there a GUI?**  
-A: Terminal UI for now. Web dashboard planned later.
+A: Minimal terminal UI with live leaderboard, repair stats, and node health. Web dashboard planned later.
 
 **Q: Can I run multiple roles on one Pi?**  
 A: Yes! Use hybrid mode: `"roles": ["satellite", "storagenode", "repairnode"]`
 
 **Q: What's the minimum network size?**  
-A: 10 nodes for k=6, n=10. Start with k=2, n=3 for 3-node testing.
+A: Recommend 4+ nodes minimum for production (1 origin + 3 satellites/storage nodes). For testing: k=2, n=3 (2 data, 1 parity) on 3-4 local nodes.
 
 ---
 
