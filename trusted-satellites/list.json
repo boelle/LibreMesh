@@ -8,17 +8,17 @@
                 "port": 8888,
                 "storage_port": 0,
                 "metrics": {
-                    "cpu_percent": 51.9,
-                    "memory_percent": 37.7,
-                    "memory_available_mb": 7453.0
+                    "cpu_percent": 50.6,
+                    "memory_percent": 37.1,
+                    "memory_available_mb": 7521.0
                 },
-                "last_seen": 1768082102.3917394,
+                "last_seen": 1768404355.2870061,
                 "repair_metrics": {
                     "jobs_created": 0,
                     "jobs_completed": 0,
                     "jobs_failed": 0,
                     "fragments_checked": 0,
-                    "last_health_check": 1768081935.892563
+                    "last_health_check": 1768404171
                 },
                 "zone": "eu-west",
                 "downstream_count": 1,
@@ -30,12 +30,12 @@
                     "bytes_reclaimed": 0,
                     "trash_items_purged": 0,
                     "trash_size": 0,
-                    "manifest_size": 1
+                    "manifest_size": 0
                 },
                 "reachable_direct": true,
                 "reachable_self": false,
                 "reachable_external_count": 4,
-                "reachable_confidence": 1.0
+                "reachable_confidence": "1.00"
             },
             {
                 "id": "LibreMesh-Sat-02",
@@ -46,13 +46,13 @@
                 "nodes": {},
                 "repair_queue": [],
                 "metrics": {
-                    "cpu_percent": 53.8,
-                    "memory_percent": 37.7,
-                    "memory_available_mb": 7453.0
+                    "cpu_percent": 51.2,
+                    "memory_percent": 37.2,
+                    "memory_available_mb": 7518.0
                 },
                 "zone": "asia-central",
                 "mode": "satellite",
-                "last_seen": 1768082090.8996518,
+                "last_seen": 1768404358.01087,
                 "reachable_direct": true,
                 "downstream_count": 0
             },
@@ -65,13 +65,13 @@
                 "nodes": {},
                 "repair_queue": [],
                 "metrics": {
-                    "cpu_percent": 56.2,
-                    "memory_percent": 37.8,
-                    "memory_available_mb": 7438.0
+                    "cpu_percent": 51.2,
+                    "memory_percent": 37.3,
+                    "memory_available_mb": 7506.0
                 },
                 "zone": "oceania-australia",
                 "mode": "satellite",
-                "last_seen": 1768082092.2968798,
+                "last_seen": 1768404337.9281552,
                 "reachable_direct": true,
                 "downstream_count": 0
             },
@@ -82,14 +82,14 @@
                 "port": 0,
                 "storage_port": 9900,
                 "capacity_bytes": 1073741824,
-                "used_bytes": 111,
+                "used_bytes": 0,
                 "metrics": {
-                    "cpu_percent": 57.5,
-                    "memory_percent": 37.7,
-                    "memory_available_mb": 7452.0
+                    "cpu_percent": 51.9,
+                    "memory_percent": 37.2,
+                    "memory_available_mb": 7519.0
                 },
                 "zone": "us-east",
-                "last_seen": 1768082062.5921428,
+                "last_seen": 1768404320.6916065,
                 "mode": "storagenode",
                 "uplink_target": "LibreMesh-Sat-01",
                 "reachable_direct": true
@@ -101,14 +101,14 @@
                 "port": 0,
                 "storage_port": 9901,
                 "capacity_bytes": 1073741824,
-                "used_bytes": 111,
+                "used_bytes": 0,
                 "metrics": {
-                    "cpu_percent": 55.8,
-                    "memory_percent": 37.7,
-                    "memory_available_mb": 7457.0
+                    "cpu_percent": 51.3,
+                    "memory_percent": 37.1,
+                    "memory_available_mb": 7520.0
                 },
                 "zone": "asia-central",
-                "last_seen": 1768082065.9717915,
+                "last_seen": 1768404324.998662,
                 "mode": "storagenode",
                 "uplink_target": "LibreMesh-Sat-02",
                 "reachable_direct": true
@@ -120,14 +120,14 @@
                 "port": 0,
                 "storage_port": 9902,
                 "capacity_bytes": 1073741824,
-                "used_bytes": 148,
+                "used_bytes": 0,
                 "metrics": {
-                    "cpu_percent": 52.5,
-                    "memory_percent": 37.7,
-                    "memory_available_mb": 7453.0
+                    "cpu_percent": 51.2,
+                    "memory_percent": 37.2,
+                    "memory_available_mb": 7514.0
                 },
                 "zone": "oceania-australia",
-                "last_seen": 1768082068.940746,
+                "last_seen": 1768404330.4510615,
                 "mode": "storagenode",
                 "uplink_target": "LibreMesh-Sat-03",
                 "reachable_direct": true
@@ -143,13 +143,13 @@
                 "nodes": {},
                 "repair_queue": [],
                 "metrics": {
-                    "cpu_percent": 50.6,
-                    "memory_percent": 37.7,
-                    "memory_available_mb": 7455.0
+                    "cpu_percent": 52.4,
+                    "memory_percent": 37.3,
+                    "memory_available_mb": 7507.0
                 },
                 "zone": "europe-west",
                 "mode": "repairnode",
-                "last_seen": 1768082007.26301,
+                "last_seen": 1768404335.7543375,
                 "reachable_direct": false,
                 "downstream_count": 0
             },
@@ -162,17 +162,17 @@
                 "nodes": {},
                 "repair_queue": [],
                 "metrics": {
-                    "cpu_percent": 52.5,
-                    "memory_percent": 37.7,
-                    "memory_available_mb": 7455.0
+                    "cpu_percent": 53.6,
+                    "memory_percent": 37.2,
+                    "memory_available_mb": 7513.0
                 },
                 "zone": "africa-north",
                 "mode": "repairnode",
-                "last_seen": 1768082007.2660832,
+                "last_seen": 1768404345.259686,
                 "reachable_direct": false,
                 "downstream_count": 0
             }
         ]
     },
-    "signature": "DfwgMbDtYnP+P9RT9rR+X/hmbB1zOVifBuE/wHk3j/BpF2J3RCBrtWr59c2Z5DI1HJPtEpvAsZJbPyjAbmHbxDpCf+T4FQNEzJiP30hODx4sVjAkjEoPDQxfaLtmFERBodI/kgXDjevhgLQFH53Z6eDpT8HCXOnP8WoJo1Li8G9K8r8ughGMgyTktj4NoKbcpZt+QNugxCA+1W8z5YrSEGI4HvhsN8ZXyk071FVR4dTjttDmnhu0OuIU+OuB702mZGGiCe+9eSOKHLDcKYcNqOfV79hbxsU2KREg3kK/FZBYeXm45uTJLYxcoN9sWlo9erzmHQUrhY42dCC05l6vRQ=="
+    "signature": "eojs411lqhf4OGzsFbehNXJD2nd2No5tGMKWThuqK7t6gNQPFQDCccQjPQzfpe6gIeg5qmXKQpN0k6GoWnS0OeGsH10ig1bckMlRFwX0IMgh+5N2tmFpNVMV9Y+9SxKw918ZV6RhsS/R6URxJFtOSmYjME+52RK/tIlJ3eEadz1CPqrU2si5IsRgrmkT/atD/sWaoLoKjFMHwT9+/v6rJ4Kihtm+NmidVxCjjpBmthaO07ZJv4OvoibGwthJBfH4xZnxMOfRfRK72lEr/lkKGLGT7DJuCJCPAWjNeaivlNRFzYY65s4HFsICry3BIp5WiH4SPZdsAhXWFzA/g2IVTA=="
 }
