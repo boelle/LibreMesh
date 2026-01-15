@@ -219,7 +219,7 @@ wget https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/requirem
 wget https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/satellite_config.json
 
 # Install dependencies
-apt-get install -y python3-cryptography python3-zfec python3-psutil python3-requests python3-geoip2
+apt-get install -y python3-cryptography python3-zfec python3-psutil python3-requests python3-geoip2 smartmontools mergerfs libfuse3
 
 **Dependencies** (5 packages):
 - `cryptography` (❗ required): TLS certificates, fingerprints, RSA, AES-GCM encryption  
