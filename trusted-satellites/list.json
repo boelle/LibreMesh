@@ -1,0 +1,117 @@
+{
+    "data": {
+        "satellites": [
+            {
+                "id": "LibreMesh-Sat-001",
+                "fingerprint": "edI7OYlHUctC56bANgu+rSHlNSEVvUDWEhHjORGKgWU=",
+                "hostname": "192.168.0.163",
+                "port": 8888,
+                "storage_port": 0,
+                "mode": "origin",
+                "zone": "europe-west"
+            },
+            {
+                "id": "LibreMesh-Sat-002",
+                "fingerprint": "CSbCCfi5k4F/FxZ/FL4UpxLiIm5Gta2kGsp8aQn4HMU=",
+                "hostname": "192.168.0.163",
+                "port": 8801,
+                "storage_port": 0,
+                "mode": "satellite",
+                "zone": "us-east"
+            },
+            {
+                "id": "LibreMesh-Sat-003",
+                "fingerprint": "BB8JUuc05DFDWr5Px5gJyv15x8fWHGM86F4U3FsKJM8=",
+                "hostname": "192.168.0.163",
+                "port": 8802,
+                "storage_port": 0,
+                "mode": "satellite",
+                "zone": "asia-east"
+            },
+            {
+                "id": "LibreMesh-Sat-004",
+                "fingerprint": "ZOAB6PzlC8VMFtRlXvdQicVVmUC8GunHmiV/L89xSfw=",
+                "hostname": "192.168.0.163",
+                "port": 8803,
+                "storage_port": 0,
+                "mode": "satellite",
+                "zone": "africa-north"
+            },
+            {
+                "id": "LibreMesh-Storage-001",
+                "fingerprint": "CUhaOCurESS+Lf3BWp2LE3JR5S+fQSh7WUQ4dalNs5U=",
+                "hostname": "192.168.0.163",
+                "port": 0,
+                "storage_port": 12800,
+                "mode": "storagenode",
+                "zone": "us-west"
+            },
+            {
+                "id": "LibreMesh-Storage-002",
+                "fingerprint": "MyTOUe67vQFPMHwxzXzuy5tbqXdORq7IHK2sm7w/ezc=",
+                "hostname": "192.168.0.163",
+                "port": 0,
+                "storage_port": 12801,
+                "mode": "storagenode",
+                "zone": "europe-north"
+            },
+            {
+                "id": "LibreMesh-Storage-003",
+                "fingerprint": "taDXXx0C59ier6aenjYhGjv71ojrL24CjeXQHGkmC0A=",
+                "hostname": "192.168.0.163",
+                "port": 0,
+                "storage_port": 12802,
+                "mode": "storagenode",
+                "zone": "asia-south"
+            },
+            {
+                "id": "LibreMesh-Storage-004",
+                "fingerprint": "rEUEOLTzTiCdbf0XgwhaCOtuxp0d4PlTeXYoKtEkQqM=",
+                "hostname": "192.168.0.163",
+                "port": 0,
+                "storage_port": 12803,
+                "mode": "storagenode",
+                "zone": "south-america-east"
+            }
+        ],
+        "repair_nodes": [
+            {
+                "id": "LibreMesh-Repair-001",
+                "fingerprint": "x5r+YLkmRBEBUAZUwEG2cM2YC7v9qT56i0SUiPubvqU=",
+                "hostname": "192.168.0.163",
+                "port": 10800,
+                "storage_port": 0,
+                "mode": "repairnode",
+                "zone": "asia-central"
+            },
+            {
+                "id": "LibreMesh-Repair-002",
+                "fingerprint": "kz9HGtvxyZ9VjwwKaFrpFGD/VRq79FL614N/ZoBM0jw=",
+                "hostname": "192.168.0.163",
+                "port": 10801,
+                "storage_port": 0,
+                "mode": "repairnode",
+                "zone": "oceania-australia"
+            },
+            {
+                "id": "LibreMesh-Repair-003",
+                "fingerprint": "Wj7F5ctP9h7mtzCaEQ8C3n5ExAOB+IjSGclYUPrZpyM=",
+                "hostname": "192.168.0.163",
+                "port": 10802,
+                "storage_port": 0,
+                "mode": "repairnode",
+                "zone": "africa-south"
+            },
+            {
+                "id": "LibreMesh-Repair-004",
+                "fingerprint": "tt02+g3UrR3D2QAuBY2HbWcSQQKqJYR7p8CJUEiwzmY=",
+                "hostname": "192.168.0.163",
+                "port": 10803,
+                "storage_port": 0,
+                "mode": "repairnode",
+                "zone": "south-america-south"
+            }
+        ]
+    },
+    "signature": "uz3bL7DKLBW5htLy3Mux4W84QAaCUEfdyxtYq9XRyYlrL0dHymBZ/vCks12Zp/xFA967VuWrb4kTz8dk19lgEKH1AsxgIh8RAX4BQ79F1FAuqBifvAScsrm8oNCKn1wXLXANdfoPexIWzfjeIG4q3cT0zmny8DRHoB7nJPuF4OlTD8ajoop37hkAqCGqkUfOoR9YunCOuT/BeJq3CLWPizw+xzf1OjCftSl0CkirwUjxp6hdUW6frK7MwmDc7Qy4wpm8r6h/7bPY2LRMEoXvbK1UkIY0P8nTBnEe4VzrPoc86gL5ttvwrNVozHgJXv+WhCa/nT/b05ug2tXwqmyRjg=="
+}
