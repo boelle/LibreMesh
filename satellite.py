@@ -15648,12 +15648,7 @@ def render_home_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> None:
     # Quick stats
     storage_nodes = sum(1 for info in TRUSTED_SATELLITES.values() if info.get('mode') == 'storagenode')
     satellite_entries = [info for sid, info in TRUSTED_SATELLITES.items()
-                         if info.get('mode') in ('satellite', 'origin') and not sid.lower().startswith('libremesh-repair')]
-    # Ensure Sat-001 (origin) is always included if present in registry
-    if 'LibreMesh-Sat-001' in TRUSTED_SATELLITES and not any(
-        sid == 'LibreMesh-Sat-001' for sid, info in TRUSTED_SATELLITES.items()
-        if info.get('mode') == 'satellite' and not sid.lower().startswith('libremesh-repair')):
-        satellite_entries.append(TRUSTED_SATELLITES['LibreMesh-Sat-001'])
+                         if info.get('mode') == 'satellite' and not sid.lower().startswith('libremesh-repair')]
     repair_entries = [info for sid, info in TRUSTED_SATELLITES.items() if info.get('mode') == 'repairnode']
     total_satellites = len(satellite_entries)
     total_repair = len(repair_entries)
@@ -15801,7 +15796,7 @@ def render_satellites_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> No
     
     # Always show all satellites, including origin (LibreMesh-Sat-001), as regular entries
     satellites = [(sat_id, info) for sat_id, info in TRUSTED_SATELLITES.items() 
-                  if info.get('mode') in ('satellite', 'origin') and not sat_id.lower().startswith('libremesh-repair')]
+                  if info.get('mode') == 'satellite' and not sat_id.lower().startswith('libremesh-repair')]
     # Ensure Sat-001 (origin) is always present
     if 'LibreMesh-Sat-001' not in [s[0] for s in satellites]:
         # Try to get from TRUSTED_SATELLITES, else create a minimal entry
@@ -16544,7 +16539,7 @@ def render_feeders_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> None:
             stdscr.addstr(line, 0, "Use ↑/↓ to select, [R]=Revoke, [B]=Block, [X]=Remove, [T]=Switch to Pending"); line += 1
             line += 1  # Blank line
             # Header row for columns
-            feeder_header_col = f"    {'Feeder ID':<22}"
+            feeder_header_col = f"    {'Feeder ID':<20}"
             key_header_col = f"{'Key':<43}"
             quota_header_col = f"{'Quota':<9}"
             rate_header_col = f"{'Rate':<8}"
