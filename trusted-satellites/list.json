@@ -9,9 +9,18 @@
                 "storage_port": 0,
                 "mode": "origin",
                 "zone": "europe-west"
+            },
+            {
+                "id": "LibreMesh-Storage-001",
+                "fingerprint": "CBNpyvDu3uhh0zz8OvN9dqqGFbD08AqjuNE9UWW2Jjw=",
+                "hostname": "217.195.184.172",
+                "port": 0,
+                "storage_port": 12800,
+                "mode": "storagenode",
+                "zone": "europe-west"
             }
         ],
         "repair_nodes": []
     },
-    "signature": "UX65MhDbI/S3gVXG3yYwRoFhcPdpoq7k5yTva1VZwjrB6jjV2XmqHaPTrwAcpYSfZ/2mWIQTnv07sk6Qlxd+Dd0d79yv29DZ8lZ+GQV84k81S61FMbBEyGJ8fkbdUVZtri4eUMDjrVw3FROrgP687cgQiiWyBfYyRxUjFBj0V0t0FNsgDO4V9Hxo1ab9rsqNwYw+b+1PfUfREHVBda2puaXAHLI1Q5VoP5aPKx/lS6e4zkhttiFCBBJxiTsp3lzefCvV1yYnrkS6BaLCwZF8AzxQ9aPbTgCtWYb7Iaem5mLoPfcqYDDCe+idS/Pk3vSsF8xqLqMmfHPv0dEQwTLA/A=="
+    "signature": "WrC7tQFLPQdshgBlzVVkL2tv21CYAE1rwsSKJ/y4Lp4s3+2nnt6I/msbVxMGlhaTl90JxtOSgnFgWtYdSS8HwAw0uE092dm1ddHHqkPiazIpJi4HtXepnbUK+mOEuMv6QJaJRBvG9qJ24cl7ZBeyJqc9IChq7qZnPDgMx8JSk/isrPp1skY8RHE2POzr68w2BWAo8t5gR7wk20OAJs0uU8seKS+F/1LYWAUuqwqIrNxJtTBG2JvVVyMEv2DQ0fvRLUPgkNiJZ43ZSrecpW6S2D17DFh2oTESfqpYlN7FoLUSKXmMI63sCysXKnXsqFEsI71oUAooCElurWC9eqsx+A=="
 }
