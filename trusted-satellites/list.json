@@ -1,0 +1,26 @@
+{
+    "data": {
+        "satellites": [
+            {
+                "id": "LibreMesh-Sat-001",
+                "fingerprint": "H5DL0cbHBpaAHAitNzt7i2oO//wo00/JeK1ARckervs=",
+                "hostname": "217.195.184.172",
+                "port": 8888,
+                "storage_port": 0,
+                "mode": "origin",
+                "zone": "europe-west"
+            },
+            {
+                "id": "LibreMesh-Storage-001",
+                "fingerprint": "CBNpyvDu3uhh0zz8OvN9dqqGFbD08AqjuNE9UWW2Jjw=",
+                "hostname": "217.195.184.172",
+                "port": 0,
+                "storage_port": 12800,
+                "mode": "storagenode",
+                "zone": "europe-west"
+            }
+        ],
+        "repair_nodes": []
+    },
+    "signature": "WrC7tQFLPQdshgBlzVVkL2tv21CYAE1rwsSKJ/y4Lp4s3+2nnt6I/msbVxMGlhaTl90JxtOSgnFgWtYdSS8HwAw0uE092dm1ddHHqkPiazIpJi4HtXepnbUK+mOEuMv6QJaJRBvG9qJ24cl7ZBeyJqc9IChq7qZnPDgMx8JSk/isrPp1skY8RHE2POzr68w2BWAo8t5gR7wk20OAJs0uU8seKS+F/1LYWAUuqwqIrNxJtTBG2JvVVyMEv2DQ0fvRLUPgkNiJZ43ZSrecpW6S2D17DFh2oTESfqpYlN7FoLUSKXmMI63sCysXKnXsqFEsI71oUAooCElurWC9eqsx+A=="
+}

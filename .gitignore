@@ -1,0 +1,54 @@
+# Security - NEVER commit private keys
+*.pem
+
+# Runtime - Operator specific (NOT the template configs!)
+config.json
+repairs.db
+fragments/
+*.log
+country_zones.json
+feeder1_config.json
+feeder2_config.json
+feeder3_config.json
+feeder4_config.json
+hybrid_config.json
+origin_config.json
+origin_config_production.json
+repairnode1_config.json
+repairnode2_config.json
+repairnode3_config.json
+repairnode4_config.json
+satellite_backup_26-01-2026.py
+satellite2_config.json
+satellite3_config.json
+satellite4_config.json
+storagenode1_config.json
+storagenode1_config_production.json
+storagenode2_config.json
+storagenode3_config.json
+storagenode4_config.json
+todo.txt
+
+# Python
+__pycache__/
+*.pyc
+
+# Development
+.venv/
+.vscode/
+.github/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Backup files
+*.bak
+*.backup
+*_backup
+

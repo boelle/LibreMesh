@@ -1,0 +1,48 @@
+{
+  "node": {
+    "mode": "repairnode"
+  },
+  "network": {
+    "origin_host": "217.195.184.172",
+    "origin_port": 8888,
+    "listen_host": "0.0.0.0",
+    "repair_rpc_port": 7888,
+    "storage_port": 0
+  },
+  "paths": {
+    "cert": "repair_cert.pem",
+    "key": "repair_key.pem",
+    "origin_pubkey": "origin_pubkey.pem",
+    "list_json": "list.json"
+  },
+  "sync": {
+    "node_sync_interval": 30,
+    "registry_sync_interval": 300,
+    "origin_pubkey_url": "https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/origin_pubkey.pem",
+    "list_json_url": "https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/trusted-satellites/list.json"
+  },
+  "comments": {
+    "purpose": "Repair worker node; connects to origin, claims repair jobs, and executes fragment reconstruction",
+    "onboarding": "Default template, typically set node name to a unique per repair node and start satellite.py. Open 8891/7888 if inbound from origin is needed",
+    "network": {
+      "origin_host": "IP/DNS of origin control plane (required to fetch jobs and register)",
+      "origin_port": "Origin control plane port (8888 by default)",
+      "listen_host": "IP to bind for inbound control (0.0.0.0 = all interfaces)",
+      "listen_port": "Local control plane port for this repair node (8891 default)",
+      "repair_rpc_port": "Port used for repair RPCs (7888 default); must be reachable by origin"
+    },
+    "paths": {
+      "cert": "TLS cert issued/approved by origin (client auth)",
+      "key": "Private key for this repair node cert",
+      "origin_pubkey": "Origin public key for verifying control messages",
+      "list_json": "Cached registry from origin (satellites/storage/repair entries)"
+    },
+    "sync": {
+      "node_sync_interval": "Seconds between heartbeat syncs to origin (advertises reachability)",
+      "registry_sync_interval": "Seconds between registry refreshes from origin (satellite/storage list)",
+      "origin_pubkey_url": "Where to fetch origin public key if missing",
+      "list_json_url": "Where to fetch trusted node registry if missing"
+    },
+    "notes": "No storage or placement policy here; this node only rebuilds fragments on demand. Keep clock synced (NTP) for TLS validity."
+  }
+}

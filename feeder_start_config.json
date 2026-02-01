@@ -1,0 +1,27 @@
+{
+  "node": {
+    "mode": "feeder"
+  },
+  "network": {
+    "listen_host": "127.0.0.1",
+    "listen_port": 0,
+    "origin_host": "217.195.184.172",
+    "origin_port": 8888
+  },
+  "data_dir": " ",
+  "paths": {
+    "cert": "feeder_cert.pem",
+    "key": "feeder_key.pem",
+    "origin_pubkey": "origin_pubkey.pem"
+  },
+  "tls_fingerprint": "SHA256:vbugv93Sm7uWRTbwEjPHjxNuB7HwUGu9TExkuZ02zp8=",
+  "comments": {
+    "purpose": "Client-side uploader/downloader - monitors local data_dir, auto-uploads to satellites for backup, downloads on-demand for recovery",
+    "onboarding": "1. Copy this file to ~/.libremesh/config.json  2. Edit ONLY data_dir (local folder to back up)  3. Start: python feeder.py",
+    "api_key": "Authentication token (do NOT share).",
+    "encryption_key": "Auto-generated on first start and saved to this config.json. Losing this key makes recovery impossible; back up config.json safely.",
+    "data_dir": "Local folder to back up",
+    "origin_host": "Pre-configured for production (static public IP); edit only if testing against different origin",
+    "default_satellite": "Optional uplink hint; feeder auto-selects best satellite based on zone/reachability"
+  }
+}

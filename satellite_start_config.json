@@ -1,0 +1,46 @@
+{
+  "node": {
+    "mode": "satellite"
+  },
+  "network": {
+    "origin_host": "217.195.184.172",
+    "origin_port": 8888,
+    "storage_port": 0
+  },
+  "sync": {
+    "node_sync_interval": 30,
+    "registry_sync_interval": 300,
+    "origin_pubkey_url": "https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/origin_pubkey.pem",
+    "list_json_url": "https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/trusted-satellites/list.json"
+  },
+  "paths": {
+    "cert": "satellite_cert.pem",
+    "key": "satellite_key.pem",
+    "origin_pubkey": "origin_pubkey.pem",
+    "list_json": "list.json"
+  },
+  "comments": {
+    "purpose": "Satellite ingress node; connects to origin, serves feeder uploads/downloads, and relays control messages",
+    "onboarding": "Default template; usually set node.name unique per satellite, confirm origin_host/origin_port, and start: python satellite.py. Allow origin + feeders to reach listen_port; keep TLS cert/key from origin bundle",
+    "network": {
+      "listen_host": "Bind address for control/feeder traffic (0.0.0.0 = all interfaces)",
+      "listen_port": "Satellite control/data port (here 8890); feeders/origin connect inbound",
+      "origin_host": "Origin control-plane address for outbound sync",
+      "origin_port": "Origin control-plane port (8888 default)",
+      "repair_rpc_port": "Port used for repair RPCs (7888 default); ensure origin can reach if used"
+    },
+    "paths": {
+      "cert": "TLS cert issued/approved by origin (client/server auth)",
+      "key": "Private key for this satellite cert",
+      "origin_pubkey": "Origin public key for verifying control messages",
+      "list_json": "Cached registry from origin (trusted nodes)"
+    },
+    "sync": {
+      "node_sync_interval": "Seconds between heartbeats to origin (advertises reachability)",
+      "registry_sync_interval": "Seconds between registry refreshes from origin",
+      "origin_pubkey_url": "Where to fetch origin public key if missing",
+      "list_json_url": "Where to fetch trusted node registry if missing"
+    },
+    "notes": "Limits/placement/feeder API keys are centralized at origin; this satellite does not set local policy. Keep clock in sync (NTP) for TLS."
+  }
+}
