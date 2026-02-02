@@ -12095,8 +12095,18 @@ async def handle_storage_rpc(reader: AsyncStreamReader, writer: AsyncStreamWrite
                             
                             # Contact target node and send fragment
                             try:
+                                target_info = TRUSTED_SATELLITES.get(target_node_id, {})
+                                target_fp = target_info.get('fingerprint') if target_info else None
+                                if not target_fp:
+                                    writer.write(json.dumps({"status": "error", "reason": "target_fingerprint_missing"}).encode() + b'\n')
+                                    await writer.drain()
+                                    raise RuntimeError("Target fingerprint missing")
+
                                 target_reader, target_writer = await open_secure_connection(
-                                    target_ip, target_storage_port, timeout=30.0
+                                    target_ip, target_storage_port,
+                                    expected_fingerprint=target_fp,
+                                    require_fingerprint=True,
+                                    timeout=30.0
                                 )
                                 
                                 # Send p2p_receive_fragment request
@@ -12426,9 +12436,10 @@ async def fetch_live_satellite_list_from_origin(origin_hostname: Optional[str] =
         # Connect to origin RPC endpoint
         logger_control.debug(f"Registry: Attempting live fetch from {origin_hostname}:{origin_port}")
         reader, writer = await open_secure_connection(
-            origin_hostname, 
-            origin_port, 
-            expected_fingerprint=origin_fingerprint, 
+            origin_hostname,
+            origin_port,
+            expected_fingerprint=origin_fingerprint or get_origin_expected_fingerprint(),
+            require_fingerprint=ORIGIN_FP_ENFORCED,
             timeout=5.0
         )
         
@@ -22589,15 +22600,25 @@ async def repairnode_sync_loop() -> None:
                 port = uplink_info.get('port') or ORIGIN_PORT  # Use satellite's control port, not REPAIR_RPC_PORT
                 connection_label = f"satellite {uplink[:20]}"
                 UPLINK_TARGET = uplink
+                expected_fp = uplink_info.get('fingerprint')
+                require_fp = True
             else:
                 # Fall back to origin
                 host = ORIGIN_HOST
                 port = ORIGIN_PORT
                 connection_label = "origin"
                 UPLINK_TARGET = None
+                expected_fp = get_origin_expected_fingerprint()
+                require_fp = ORIGIN_FP_ENFORCED
             
             logger_control.info(f"Repairnode: Opening persistent connection to {connection_label} ({host}:{port})...")
-            reader, writer = await open_secure_connection(host, port, timeout=10.0)
+            reader, writer = await open_secure_connection(
+                host,
+                port,
+                expected_fingerprint=expected_fp,
+                require_fingerprint=require_fp,
+                timeout=10.0
+            )
             
             ORIGIN_CONNECTION["reader"] = reader
             ORIGIN_CONNECTION["writer"] = writer
@@ -22870,15 +22891,25 @@ async def node_sync_loop() -> None:
                 target_host = target_info.get('hostname', ORIGIN_HOST)
                 target_port = target_info.get('port', ORIGIN_PORT)
                 target_name = f"satellite {UPLINK_TARGET[:20]}"
+                expected_fp = target_info.get('fingerprint')
+                require_fp = True
             else:
                 # Connect to origin (default)
                 target_host = ORIGIN_HOST
                 target_port = ORIGIN_PORT
                 target_name = "origin"
                 UPLINK_TARGET = None
+                expected_fp = get_origin_expected_fingerprint()
+                require_fp = ORIGIN_FP_ENFORCED
             
             logger_control.info(f"Connecting to {target_name} {target_host}:{target_port}...")
-            reader, writer = await open_secure_connection(target_host, target_port, timeout=10.0)
+            reader, writer = await open_secure_connection(
+                target_host,
+                target_port,
+                expected_fingerprint=expected_fp,
+                require_fingerprint=require_fp,
+                timeout=10.0
+            )
             
             # Store connection globally
             ORIGIN_CONNECTION["reader"] = reader
