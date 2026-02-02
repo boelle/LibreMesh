@@ -2500,7 +2500,7 @@ def auto_detect_node_id_and_port(node_mode: str, config: dict[str, Any]) -> tupl
     port_valid = isinstance(existing_port, int) and existing_port > 0
 
     if name_valid and port_valid:
-        print(f"[Auto-detect] Using cached node ID: {existing_name}, port: {existing_port}")
+        logger_control.info(f"[Auto-detect] Using cached node ID: {existing_name}, port: {existing_port}")
         return existing_name, existing_port
 
     all_node_ids = set()
@@ -2536,9 +2536,9 @@ def auto_detect_node_id_and_port(node_mode: str, config: dict[str, Any]) -> tupl
                     except (ValueError, IndexError):
                         pass
             if all_node_ids:
-                print(f"[Auto-detect] Using live origin registry for {node_mode} numbering")
+                logger_control.info(f"[Auto-detect] Using live origin registry for {node_mode} numbering")
     except Exception as e:
-        print(f"[Auto-detect] Warning: Live origin registry fetch failed: {e}")
+        logger_control.warning(f"[Auto-detect] Live origin registry fetch failed: {e}")
 
     # 2) Fallback to local seed file
     if not all_node_ids:
@@ -2557,7 +2557,7 @@ def auto_detect_node_id_and_port(node_mode: str, config: dict[str, Any]) -> tupl
                         except (ValueError, IndexError):
                             pass
         except Exception as e:
-            print(f"[Auto-detect] Warning: Could not read local list.json: {e}")
+            logger_control.warning(f"[Auto-detect] Could not read local list.json: {e}")
 
     # 3) Final fallback to GitHub seed
     if not all_node_ids:
@@ -2576,7 +2576,7 @@ def auto_detect_node_id_and_port(node_mode: str, config: dict[str, Any]) -> tupl
                     except (ValueError, IndexError):
                         pass
         except Exception as e:
-            print(f"[Auto-detect] Warning: Could not fetch GitHub list.json: {e}")
+            logger_control.warning(f"[Auto-detect] Could not fetch GitHub list.json: {e}")
 
     if all_node_ids:
         next_id_num = max(all_node_ids) + 1
@@ -2586,7 +2586,7 @@ def auto_detect_node_id_and_port(node_mode: str, config: dict[str, Any]) -> tupl
     next_node_id = f"{mode_prefix}-{next_id_num:03d}"
     next_port = port_base + (next_id_num - 1)
 
-    print(f"[Auto-detect] Detected next {node_mode} ID: {next_node_id} (port {next_port})")
+    logger_control.info(f"[Auto-detect] Detected next {node_mode} ID: {next_node_id} (port {next_port})")
 
     try:
         if 'node' not in config:
@@ -2604,9 +2604,9 @@ def auto_detect_node_id_and_port(node_mode: str, config: dict[str, Any]) -> tupl
         config_path = 'config.json'
         with open(config_path, 'w') as f:
             json.dump(config, f, indent=2)
-        print(f"[Auto-detect] Saved auto-detected values to {config_path}")
+        logger_control.info(f"[Auto-detect] Saved auto-detected values to {config_path}")
     except Exception as e:
-        print(f"[Auto-detect] Warning: Could not save config: {e}")
+        logger_control.warning(f"[Auto-detect] Could not save config: {e}")
 
     return next_node_id, next_port
 
@@ -2631,7 +2631,7 @@ if _node_mode_tmp in ['satellite', 'repairnode', 'storagenode']:
             if not (isinstance(_CONFIG['network'].get('listen_port'), int) and _CONFIG['network']['listen_port'] > 0):
                 _CONFIG['network']['listen_port'] = auto_port
     except Exception as e:
-        print(f"[Startup] Auto-detection failed (non-fatal): {e}")
+        logger_control.warning(f"[Startup] Auto-detection failed (non-fatal): {e}")
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -15128,7 +15128,7 @@ def render_feeder_home_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> N
         last_upload = "never"
     stdscr.addstr(line, 0, "Upload Activity:"); line += 1
     stdscr.addstr(line, 0, f"  Uploads Today:    {uploads_today}"); line += 1
-    stdscr.addstr(line, 0, f"  Queue Size:       {queue_size}"); line += 1
+    stdscr.addstr(line, 0, f"  Total File Count: {queue_size}"); line += 1
     stdscr.addstr(line, 0, f"  Last Upload:      {last_upload}"); line += 1
     line += 1
     
@@ -15679,7 +15679,7 @@ def render_home_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> None:
     # Quick stats
     storage_nodes = sum(1 for info in TRUSTED_SATELLITES.values() if info.get('mode') == 'storagenode')
     satellite_entries = [info for sid, info in TRUSTED_SATELLITES.items()
-                         if info.get('mode') == 'satellite' and not sid.lower().startswith('libremesh-repair')]
+                         if info.get('mode') in ('satellite', 'origin') and not sid.lower().startswith('libremesh-repair')]
     repair_entries = [info for sid, info in TRUSTED_SATELLITES.items() if info.get('mode') == 'repairnode']
     total_satellites = len(satellite_entries)
     total_repair = len(repair_entries)
@@ -15698,11 +15698,6 @@ def render_home_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> None:
     online_threshold = 300  # seconds
     online_satellites = sum(1 for info in satellite_entries if (now - info.get('last_seen', 0)) < online_threshold)
     online_repair = sum(1 for info in repair_entries if (now - info.get('last_seen', 0)) < online_threshold)
-
-    # Include origin itself in satellite counts if running on origin (cosmetic preference)
-    if IS_ORIGIN:
-        total_satellites += 1
-        online_satellites += 1
 
     # Include this node in repair node counts when running as repair node (display bug fix)
     if NODE_MODE == 'repairnode':
@@ -15812,11 +15807,11 @@ def render_satellites_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> No
     stdscr.addstr(line, 0, "=" * (max_x - 1)); line += 1
     
     # Use fixed column widths with generous space for IDs and zones
-    # Satellite ID: 90 chars (plenty of room for full IDs and markers)
-    # Zone: 82 chars (room for full zone names and future expansions)
+    # Satellite ID: 76 chars
+    # Zone: 68 chars
     # Status: 7, Direct: 6, CPU%: 5, Mem%: 5, Downstream: 11, Last Seen: 10
-    id_width = 90
-    zone_width = 82
+    id_width = 76
+    zone_width = 68
     
     # Header (fixed-width columns)
     header_line = f"{'Satellite ID':<{id_width}} | {'Zone':<{zone_width}} | {'Status':<7} | {'Direct':<6} | {'CPU%':<5} | {'Mem%':<5} | {'Downstream':<11} | {'Last Seen':<10}"
@@ -15917,11 +15912,11 @@ def render_nodes_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> None:
     stdscr.addstr(line, 0, "=" * (max_x - 1)); line += 1
     
     # Use fixed column widths with generous space for IDs and zones
-    # Rank: 6, Node ID: 80 chars (plenty of room for full storage node IDs)
-    # Zone: 74 chars (room for full zone names and future expansions)
+    # Rank: 6, Node ID: 66 chars
+    # Zone: 60 chars
     # Port: 5, Score: 5, Fill%: 6, Capacity: 12, Uptime: 7, Reach%: 6, Last Seen: 10
-    node_id_width = 80
-    zone_width = 74
+    node_id_width = 66
+    zone_width = 60
     
     # Header (fixed-width columns)
     header_line = f"{'Rank':<6}| {'Node ID':<{node_id_width}} | {'Zone':<{zone_width}} | {'Port':<5} | {'Score':<5} | {'Fill%':<6} | {'Capacity':<12} | {'Uptime':<7} | {'Reach%':<6} | {'Last Seen':<10}"
@@ -16142,9 +16137,9 @@ def render_repair_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> None:
     
     # Repair nodes table (same format as satellites/storage nodes)
     # Use fixed column widths consistent with satellites screen
-    # Move right columns 14 chars to the right by expanding zone width
-    repair_id_width = 90
-    repair_zone_width = 96  # 82 + 14 = 96
+    # Repair Node ID: 76 chars, Zone: 82 chars (reduced by 14 from originals)
+    repair_id_width = 76
+    repair_zone_width = 82
     repair_header = f"{'Repair Node ID':<{repair_id_width}} | {'Zone':<{repair_zone_width}} | {'Status':<7} | {'Direct':<6} | {'CPU%':<5} | {'Mem%':<5} | {'Last Seen':<10}"
     stdscr.addstr(line, 0, repair_header); line += 1
     stdscr.addstr(line, 0, "-" * (max_x - 1)); line += 1
@@ -16221,7 +16216,7 @@ def render_repair_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> None:
         stdscr.addstr(line, 0, "-" * (max_x - 1)); line += 1
     
     # Header
-    stdscr.addstr(line, 0, f"{'Job ID (Fragment)':<190} | {'Status':<8} | {'Claimed By':<20}"); line += 1
+    stdscr.addstr(line, 0, f"{'Job ID (Fragment)':<130} | {'Status':<8} | {'Claimed By':<76}"); line += 1
     stdscr.addstr(line, 0, "-" * (max_x - 1)); line += 1
     
     if IS_ORIGIN:
@@ -16232,26 +16227,26 @@ def render_repair_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> None:
             jobs = pending_jobs + claimed_jobs
             
             if not jobs:
-                stdscr.addstr(line, 0, f"{'Queue is empty':<190} | {'N/A':<8} | {'N/A':<20}"); line += 1
+                stdscr.addstr(line, 0, f"{'Queue is empty':<130} | {'N/A':<8} | {'N/A':<76}"); line += 1
             else:
                 for job in jobs[:15]:  # Limit to 15 total
                     if line >= max_lines - 10:
                         break
                     job_id_display = f"{job['object_id'][-8:]}/{job['fragment_index']}"
-                    claimed_by_display = job['claimed_by'][:20] if job['claimed_by'] else 'N/A'
-                    stdscr.addstr(line, 0, f"{job_id_display:<190} | {job['status']:<8} | {claimed_by_display:<20}"); line += 1
+                    claimed_by_display = job['claimed_by'][:76] if job['claimed_by'] else 'N/A'
+                    stdscr.addstr(line, 0, f"{job_id_display:<130} | {job['status']:<8} | {claimed_by_display:<76}"); line += 1
         except Exception:
-            stdscr.addstr(line, 0, f"{'Error reading queue':<190} | {'N/A':<8} | {'N/A':<20}"); line += 1
+            stdscr.addstr(line, 0, f"{'Error reading queue':<130} | {'N/A':<8} | {'N/A':<76}"); line += 1
     else:
         if REPAIR_QUEUE_CACHE:
             for job in REPAIR_QUEUE_CACHE[:15]:
                 if line >= max_lines - 10:
                     break
                 job_id_display = f"{job['object_id'][-8:]}/{job['fragment_index']}"
-                claimed_by_display = job['claimed_by'][:20] if job['claimed_by'] else 'N/A'
-                stdscr.addstr(line, 0, f"{job_id_display:<190} | {job['status']:<8} | {claimed_by_display:<20}"); line += 1
+                claimed_by_display = job['claimed_by'][:76] if job['claimed_by'] else 'N/A'
+                stdscr.addstr(line, 0, f"{job_id_display:<130} | {job['status']:<8} | {claimed_by_display:<76}"); line += 1
         else:
-            stdscr.addstr(line, 0, f"{'Queue is empty':<190} | {'N/A':<8} | {'N/A':<20}"); line += 1
+            stdscr.addstr(line, 0, f"{'Queue is empty':<130} | {'N/A':<8} | {'N/A':<76}"); line += 1
     
     # Deletion queue
     line += 1
@@ -16260,7 +16255,7 @@ def render_repair_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> None:
     padding = (max_x - len(header_text)) // 2
     stdscr.addstr(line, 0, " " * padding + header_text); line += 1
     stdscr.addstr(line, 0, "=" * (max_x - 1)); line += 1
-    stdscr.addstr(line, 0, f"{'Job ID (Fragment)':<190} | {'Status':<8} | {'Claimed By':<20}"); line += 1
+    stdscr.addstr(line, 0, f"{'Job ID (Fragment)':<130} | {'Status':<8} | {'Claimed By':<76}"); line += 1
     stdscr.addstr(line, 0, "-" * (max_x - 1)); line += 1
     if IS_ORIGIN:
         try:
@@ -16268,17 +16263,17 @@ def render_repair_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> None:
             dclaimed = list_deletion_jobs(status='claimed', limit=15)
             djobs = dpending + dclaimed
             if not djobs:
-                stdscr.addstr(line, 0, f"{'Queue is empty':<190} | {'N/A':<8} | {'N/A':<20}"); line += 1
+                stdscr.addstr(line, 0, f"{'Queue is empty':<130} | {'N/A':<8} | {'N/A':<76}"); line += 1
             else:
                 for job in djobs[:15]:
                     if line >= max_lines - 10:
                         break
                     job_id_display = f"{job['object_id'][-8:]}/{job['fragment_index']}"
                     claimed_by = job.get('claimed_by')
-                    claimed_by_display = claimed_by[:20] if isinstance(claimed_by, str) else 'N/A'
-                    stdscr.addstr(line, 0, f"{job_id_display:<190} | {job['status']:<8} | {claimed_by_display:<20}"); line += 1
+                    claimed_by_display = claimed_by[:76] if isinstance(claimed_by, str) else 'N/A'
+                    stdscr.addstr(line, 0, f"{job_id_display:<130} | {job['status']:<8} | {claimed_by_display:<76}"); line += 1
         except Exception:
-            stdscr.addstr(line, 0, f"{'Error reading queue':<190} | {'N/A':<8} | {'N/A':<20}"); line += 1
+            stdscr.addstr(line, 0, f"{'Error reading queue':<130} | {'N/A':<8} | {'N/A':<76}"); line += 1
     else:
         if DELETION_QUEUE_CACHE:
             for job in DELETION_QUEUE_CACHE[:15]:
@@ -16286,10 +16281,10 @@ def render_repair_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> None:
                     break
                 job_id_display = f"{job['object_id'][-8:]}/{job['fragment_index']}"
                 claimed_by = job.get('claimed_by')
-                claimed_by_display = claimed_by[:20] if isinstance(claimed_by, str) else 'N/A'
-                stdscr.addstr(line, 0, f"{job_id_display:<190} | {job['status']:<8} | {claimed_by_display:<20}"); line += 1
+                claimed_by_display = claimed_by[:76] if isinstance(claimed_by, str) else 'N/A'
+                stdscr.addstr(line, 0, f"{job_id_display:<130} | {job['status']:<8} | {claimed_by_display:<76}"); line += 1
         else:
-            stdscr.addstr(line, 0, f"{'Queue is empty':<190} | {'N/A':<8} | {'N/A':<20}"); line += 1
+            stdscr.addstr(line, 0, f"{'Queue is empty':<130} | {'N/A':<8} | {'N/A':<76}"); line += 1
 
     # Repair stats
     line += 1
@@ -16648,7 +16643,7 @@ def render_abuse_detection_screen(stdscr: Any, max_lines: int, max_x: int = 78) 
         stdscr.addstr(line, 0, ""); line += 1
         
         # Legend (fixed-width symbols)
-        stdscr.addstr(line, 0, "Legend: o No votes  |  ! Voting in progress"); line += 1
+        stdscr.addstr(line, 0, "Legend: ⬤ No votes  |  ⚠️ Voting in progress"); line += 1
         line += 1
         
         if review_items:
@@ -16673,8 +16668,8 @@ def render_abuse_detection_screen(stdscr: Any, max_lines: int, max_x: int = 78) 
                     break
                 
                 prefix = ">" if idx == ABUSE_DETECTION_CURSOR else " "
-                # Use fixed-width status indicator to avoid emoji width issues
-                status_mark = "!" if data.get("block_status") == "voting" else "o"
+                # Use emoji status indicator for quick visual recognition
+                status_mark = "⚠️" if data.get("block_status") == "voting" else "⬤"
                 votes = data.get("block_votes", {})
                 reason = data.get("block_reason", "none")
                 
@@ -16739,7 +16734,7 @@ def render_abuse_detection_screen(stdscr: Any, max_lines: int, max_x: int = 78) 
         blocked_count = len(blocked_items)
         stdscr.addstr(line, 0, f"Blocked Feeders: {blocked_count}"); line += 1
         stdscr.addstr(line, 0, ""); line += 1
-        stdscr.addstr(line, 0, "Legend: o No petition votes  |  ! Petition in progress"); line += 1
+        stdscr.addstr(line, 0, "Legend: ○ No petition votes  |  ⚠️ Petition in progress"); line += 1
         stdscr.addstr(line, 0, ""); line += 1
         
         # Always show helper bar for consistency
@@ -16768,8 +16763,8 @@ def render_abuse_detection_screen(stdscr: Any, max_lines: int, max_x: int = 78) 
                 dissent_pct = int(100 * dissent_votes / total_sats) if total_sats > 0 else 0
                 petition_str = f"{dissent_votes}/{total_sats} ({dissent_pct:>3}%)"
                 
-                # Show icon based on petition progress (fixed-width symbols)
-                status_mark = "!" if dissent_votes > 0 else "o"
+                # Show icon based on petition progress (emoji for quick recognition)
+                status_mark = "⚠️" if dissent_votes > 0 else "⬤"
                 # Cooloff column (shows remaining time if active)
                 cooloff_ts = data.get("petition_rejected_at")
                 cooloff_str = "-"
@@ -16831,9 +16826,12 @@ def render_abuse_detection_screen(stdscr: Any, max_lines: int, max_x: int = 78) 
                 dissenting = len([k for k in data.get("block_votes", {}).keys() if k.startswith("dissent_")])
                 dissent_pct = int(100 * dissenting / total_sats) if total_sats > 0 else 0
                 
+                # Show emoji status indicator for petition progress
+                status_mark = "⚠️" if dissenting > 0 else "⬤"
+                
                 reason = data.get("block_reason", "unknown")
                 dissent_str = f"{dissenting}/{total_sats} ({dissent_pct:>3}%)"
-                line_text = f"{prefix} {owner_id[:24]:<24} │ {dissent_str:<13} │ {initiator[:24]:<24} │ {reason}"
+                line_text = f"{prefix} {status_mark} {owner_id[:24]:<24} │ {dissent_str:<13} │ {initiator[:24]:<24} │ {reason}"
                 stdscr.addstr(line, 0, line_text[:max_x-1]); line += 1
         else:
             stdscr.addstr(line, 0, "(none - no pending petitions)"); line += 1
@@ -20767,9 +20765,9 @@ async def feeder_main() -> None:
                         line += f" warning={warn}"
                     if blocked and guard.get("reason"):
                         line += f" reason={guard.get('reason')}"
-                    print(line)
+                    logger_storage.info(line)
                 else:
-                    print(f"[Feeder] Guard check failed: {guard.get('reason', 'unknown error')}")
+                    logger_storage.error(f"[Feeder] Guard check failed: {guard.get('reason', 'unknown error')}")
             await asyncio.sleep(30)
     
     # Generate encryption key EARLY (before any config writes) for AES-256 data encryption
@@ -20779,14 +20777,14 @@ async def feeder_main() -> None:
         encryption_key_bytes = os.urandom(32)  # 256-bit key for AES-256
         encryption_key_b64 = base64.b64encode(encryption_key_bytes).decode()
         _CONFIG["encryption_key"] = encryption_key_b64
-        print(f"[Feeder] Encryption key auto-generated (AES-256)")
+        logger_storage.info("[Feeder] Encryption key auto-generated (AES-256)")
         # Persist immediately so it's not lost
         try:
             with open('config.json', 'w', encoding='utf-8') as f:
                 json.dump(_CONFIG, f, indent=2)
-            print(f"[Feeder] Encryption key saved to config.json")
+            logger_storage.info("[Feeder] Encryption key saved to config.json")
         except Exception as e:
-            print(f"[Feeder] WARNING: Failed to save encryption key to config.json: {e}")
+            logger_storage.warning(f"[Feeder] Failed to save encryption key to config.json: {e}")
     else:
         encryption_key_b64 = _CONFIG.get("encryption_key", "")
     
@@ -20794,7 +20792,7 @@ async def feeder_main() -> None:
     try:
         encryption_key = base64.b64decode(encryption_key_b64) if encryption_key_b64 else os.urandom(32)
     except Exception as e:
-        print(f"[Feeder] WARNING: Could not decode encryption key: {e}")
+        logger_storage.warning(f"[Feeder] Could not decode encryption key: {e}")
         encryption_key = os.urandom(32)
     
     # Auto-register with origin if no API key
@@ -20851,7 +20849,7 @@ async def feeder_main() -> None:
             try:
                 with open('config.json', 'w', encoding='utf-8') as f:
                     json.dump(_CONFIG, f, indent=2)
-                print(f"[Feeder] Auto-generated ID: {feeder_id}")
+                logger_storage.info(f"[Feeder] Auto-generated ID: {feeder_id}")
             except Exception:
                 pass
         else:
@@ -20860,11 +20858,11 @@ async def feeder_main() -> None:
         owner_id = feeder_id  # Use same as feeder_id
         contact = _CONFIG.get("node", {}).get("contact") or _CONFIG.get("contact") or ""
         
-        print(f"[Feeder] No API key configured - requesting approval from origin...")
-        print(f"[Feeder] Feeder ID: {feeder_id}")
-        print(f"[Feeder] Owner ID: {owner_id}")
-        print(f"[Feeder] Contact: {contact or '(not set)'}")
-        print(f"[Feeder] Origin: {origin_host}:{join_poll_port}")
+        logger_storage.info("[Feeder] No API key configured - requesting approval from origin...")
+        logger_storage.info(f"[Feeder] Feeder ID: {feeder_id}")
+        logger_storage.info(f"[Feeder] Owner ID: {owner_id}")
+        logger_storage.info(f"[Feeder] Contact: {contact or '(not set)'}")
+        logger_storage.info(f"[Feeder] Origin: {origin_host}:{join_poll_port}")
         
         # Send join request and poll until approved
         max_attempts = 60  # Poll for up to 5 minutes
@@ -20895,7 +20893,7 @@ async def feeder_main() -> None:
                 except asyncio.TimeoutError:
                     writer.close()
                     await writer.wait_closed()
-                    print(f"[Feeder] Read timeout from origin (attempt {attempt+1}/{max_attempts})")
+                    logger_storage.warning(f"[Feeder] Read timeout from origin (attempt {attempt+1}/{max_attempts})")
                     await asyncio.sleep(poll_interval)
                     continue
                 
@@ -20903,19 +20901,19 @@ async def feeder_main() -> None:
                 await writer.wait_closed()
                 
                 if not line:
-                    print(f"[Feeder] Empty response from origin (attempt {attempt+1}/{max_attempts})")
+                    logger_storage.warning(f"[Feeder] Empty response from origin (attempt {attempt+1}/{max_attempts})")
                     await asyncio.sleep(poll_interval)
                     continue
                 
                 try:
                     response = json.loads(line.decode().strip())
                 except json.JSONDecodeError as e:
-                    print(f"[Feeder] Invalid JSON response: {e} (attempt {attempt+1}/{max_attempts})")
+                    logger_storage.warning(f"[Feeder] Invalid JSON response: {e} (attempt {attempt+1}/{max_attempts})")
                     await asyncio.sleep(poll_interval)
                     continue
                 
                 if response.get("status") != "ok":
-                    print(f"[Feeder] Join request failed: {response.get('reason', 'unknown error')}")
+                    logger_storage.warning(f"[Feeder] Join request failed: {response.get('reason', 'unknown error')}")
                     await asyncio.sleep(poll_interval)
                     continue
                 
@@ -20928,45 +20926,45 @@ async def feeder_main() -> None:
                         try:
                             with open('config.json', 'w', encoding='utf-8') as f:
                                 json.dump(_CONFIG, f, indent=2)
-                            print(f"[Feeder] ✅ APPROVED! API key received and saved to config.json")
-                            print(f"[Feeder] API Key: {api_key[:20]}...")
+                            logger_storage.info("[Feeder] ✅ APPROVED! API key received and saved to config.json")
+                            logger_storage.info(f"[Feeder] API Key: {api_key[:20]}...")
                         except Exception as e:
-                            print(f"[Feeder] WARNING: Received API key but failed to save config.json: {e}")
+                            logger_storage.warning(f"[Feeder] Received API key but failed to save config.json: {e}")
                         break
                     else:
-                        print(f"[Feeder] Approved but no API key in response")
+                        logger_storage.warning("[Feeder] Approved but no API key in response")
                         await asyncio.sleep(poll_interval)
                         continue
                 elif state == "denied":
                     reason = response.get("reason", "Join request denied by operator")
                     retry_after = response.get("retry_after", 300)
-                    print(f"[Feeder] ❌ DENIED: {reason}")
-                    print(f"[Feeder] Try again in {retry_after} seconds or contact the operator.")
-                    print(f"[Feeder] Exiting...")
+                    logger_storage.error(f"[Feeder] ❌ DENIED: {reason}")
+                    logger_storage.error(f"[Feeder] Try again in {retry_after} seconds or contact the operator.")
+                    logger_storage.error("[Feeder] Exiting...")
                     import sys
                     sys.exit(1)
                 elif state == "pending":
                     if attempt == 0:
-                        print(f"[Feeder] Join request sent - awaiting operator approval...")
+                        logger_storage.info("[Feeder] Join request sent - awaiting operator approval...")
                     elif attempt % 6 == 0:  # Print progress every 30 seconds
-                        print(f"[Feeder] Still waiting for approval... ({attempt*poll_interval}s elapsed)")
+                        logger_storage.info(f"[Feeder] Still waiting for approval... ({attempt*poll_interval}s elapsed)")
                     await asyncio.sleep(poll_interval)
                     continue
                 else:
-                    print(f"[Feeder] Unexpected state: {state}")
+                    logger_storage.warning(f"[Feeder] Unexpected state: {state}")
                     await asyncio.sleep(poll_interval)
                     continue
                     
             except asyncio.TimeoutError:
-                print(f"[Feeder] Connection timeout (attempt {attempt+1}/{max_attempts})")
+                logger_storage.warning(f"[Feeder] Connection timeout (attempt {attempt+1}/{max_attempts})")
                 await asyncio.sleep(poll_interval)
             except Exception as e:
-                print(f"[Feeder] Join request error: {type(e).__name__}: {e}")
+                logger_storage.error(f"[Feeder] Join request error: {type(e).__name__}: {e}")
                 await asyncio.sleep(poll_interval)
         
         if not api_key:
-            print(f"[Feeder] ❌ Failed to get API key after {max_attempts} attempts")
-            print(f"[Feeder] Exiting - please check origin connectivity or request manual approval")
+            logger_storage.error(f"[Feeder] ❌ Failed to get API key after {max_attempts} attempts")
+            logger_storage.error("[Feeder] Exiting - please check origin connectivity or request manual approval")
             return
     else:
         api_key = _CONFIG.get("api_key", "UNCONFIGURED")
@@ -20977,7 +20975,7 @@ async def feeder_main() -> None:
         encryption_key_bytes = os.urandom(32)  # 256-bit key for AES-256
         encryption_key_b64 = base64.b64encode(encryption_key_bytes).decode()
         _CONFIG["encryption_key"] = encryption_key_b64
-        print(f"[Feeder] Encryption key auto-generated (AES-256)")
+        logger_storage.info("[Feeder] Encryption key auto-generated (AES-256)")
     else:
         encryption_key_b64 = _CONFIG.get("encryption_key", "")
     
@@ -20985,7 +20983,7 @@ async def feeder_main() -> None:
     try:
         encryption_key = base64.b64decode(encryption_key_b64) if encryption_key_b64 else os.urandom(32)
     except Exception as e:
-        print(f"[Feeder] WARNING: Could not decode encryption key: {e}")
+        logger_storage.warning(f"[Feeder] Could not decode encryption key: {e}")
         encryption_key = os.urandom(32)
     
     # Compute machine fingerprint to detect ghost feeders (if not already computed during join request)
@@ -21002,58 +21000,32 @@ async def feeder_main() -> None:
     # Create data directory if missing
     os.makedirs(data_dir, exist_ok=True)
     
-    # Display feeder startup info
-    print("\n" + "="*78)
-    print("                           FEEDER CLIENT")
-    print("="*78)
-    print(f"Owner ID:              {owner_id}")
-    print(f"API Key:               {api_key[:20]}...")
-    print(f"Smart Selection:       Enabled (zone-aware satellite selection)")
-    print(f"Registry Source:       trusted-satellites/list.json")
-    print(f"Upload Directory:      {data_dir}")
-    print("="*78)
-    print("\nFeeder is ready. Use the client library to upload/download/list/delete.")
-    print("Register this API key on the origin/satellite in feeder.api_keys config.")
-    print("="*78)
-
-    # Show feeder upload guard status (degraded policy visibility)
-    guard = await _fetch_guard_status()
-    print("\n" + "="*78)
-    print("                  Feeder Upload Guard Status")
-    print("="*78)
-    if guard.get("status") == "ok":
-        status_upper = str(guard.get("degraded_status", "unknown")).upper()
-        if guard.get("blocked"):
-            line = f"Status: {status_upper} (blocked)"
-        elif guard.get("warning"):
-            line = f"Status: {status_upper} (warning)"
-        else:
-            line = f"Status: {status_upper} (ok)"
-        print(line)
-        cap_bytes = guard.get("unprotected_cap_bytes") or 0
-        used_bytes = guard.get("unprotected_used_bytes") or 0
-        grace = int(guard.get("grace_remaining_seconds") or 0)
-        if cap_bytes > 0:
-            cap_mb = cap_bytes / (1024 * 1024)
-            used_mb = used_bytes / (1024 * 1024)
-            print(f"Unprotected usage: {used_mb:.1f}MB / {cap_mb:.1f}MB")
-        else:
-            print("Unprotected usage: tracking disabled")
-        print(f"Grace before auto-pause: {grace}s")
-        if guard.get("warning"):
-            print(f"Warning: {guard.get('warning')}")
-        if guard.get("reason") and guard.get("blocked"):
-            print(f"Reason: {guard.get('reason')}")
-    else:
-        print(f"Guard check failed: {guard.get('reason', 'unknown error')}")
-    print("="*78 + "\n")
 
     # Start periodic registry refresh and guard watcher so state changes are visible while feeder runs
     asyncio.create_task(_registry_refresher())
     asyncio.create_task(_guard_watcher())
     
-    # File tracking for upload detection
+    # File tracking for upload detection (persisted to avoid re-uploads on restart)
+    file_tracking_path = os.path.join(data_dir, '.file_tracking.json')
     file_tracking: Dict[str, Dict[str, Any]] = {}
+    
+    # Load existing file tracking from disk
+    if os.path.exists(file_tracking_path):
+        try:
+            with open(file_tracking_path, 'r') as f:
+                file_tracking = json.load(f)
+            logger_storage.info(f"[Feeder] Loaded {len(file_tracking)} tracked files from disk")
+        except Exception as e:
+            logger_storage.warning(f"[Feeder] Failed to load file tracking: {e}")
+            file_tracking = {}
+    
+    def _save_file_tracking() -> None:
+        """Save file_tracking dict to disk to persist across restarts."""
+        try:
+            with open(file_tracking_path, 'w') as f:
+                json.dump(file_tracking, f, indent=2)
+        except Exception as e:
+            logger_storage.warning(f"[Feeder] Failed to save file tracking: {e}")
     
     # File monitor for auto-upload detection
     async def _file_monitor() -> None:
@@ -21130,7 +21102,6 @@ async def feeder_main() -> None:
                             response_line = await reader.readline()
                             if not response_line:
                                 logger_storage.warning(f"[Feeder] Upload failed: {filename} - no response")
-                                print(f"[Feeder] ✗ {filename} upload failed: no response")
                                 writer.close()
                                 await writer.wait_closed()
                                 continue
@@ -21152,6 +21123,7 @@ async def feeder_main() -> None:
                                     if final_response.get('status') == 'ok':
                                         file_tracking[filename]['uploaded'] = True
                                         file_tracking[filename]['object_id'] = object_id
+                                        _save_file_tracking()  # Persist to disk immediately
                                         # Update local UI stats
                                         now = time.time()
                                         today = int(time.strftime("%Y%m%d", time.localtime(now)))
@@ -21160,22 +21132,17 @@ async def feeder_main() -> None:
                                         FEEDER_CLIENT_STATS["uploads_today"] = FEEDER_CLIENT_STATS.get("uploads_today", 0) + 1
                                         FEEDER_CLIENT_STATS["last_upload_ts"] = now
                                         logger_storage.info(f"[Feeder] Upload complete: {filename} ({len(plaintext)} bytes) -> {object_id}")
-                                        print(f"[Feeder] ✓ {filename} uploaded")
                                     else:
                                         logger_storage.warning(f"[Feeder] Upload failed: {filename} - {final_response.get('reason', 'unknown')}")
-                                        print(f"[Feeder] ✗ {filename} upload failed: {final_response.get('reason', 'unknown')}")
                                 else:
                                     logger_storage.warning(f"[Feeder] Upload failed: {filename} - no final response")
-                                    print(f"[Feeder] ✗ {filename} upload failed: no final response")
                             else:
                                 logger_storage.warning(f"[Feeder] Upload rejected: {filename} - {response.get('reason', 'unknown')}")
-                                print(f"[Feeder] ✗ {filename} rejected: {response.get('reason', 'unknown')}")
                                 writer.close()
                                 await writer.wait_closed()
                         
                         except Exception as e:
                             logger_storage.error(f"[Feeder] Upload error for {filename}: {e}")
-                            print(f"[Feeder] ✗ {filename} upload error: {e}")
             
             except Exception as e:
                 logger_storage.error(f"[Feeder] File monitor error: {e}")

@@ -14,6 +14,12 @@
     "key": "feeder_key.pem",
     "origin_pubkey": "origin_pubkey.pem"
   },
+    "sync": {
+    "node_sync_interval": 30,
+    "registry_sync_interval": 300,
+    "origin_pubkey_url": "https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/origin_pubkey.pem",
+    "list_json_url": "https://raw.githubusercontent.com/boelle/LibreMesh/refs/heads/main/trusted-satellites/list.json"
+  },
   "tls_fingerprint": "SHA256:vbugv93Sm7uWRTbwEjPHjxNuB7HwUGu9TExkuZ02zp8=",
   "comments": {
     "purpose": "Client-side uploader/downloader - monitors local data_dir, auto-uploads to satellites for backup, downloads on-demand for recovery",
