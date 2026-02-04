@@ -45,10 +45,6 @@ STEP 2: ROLE DECISION
     - Whether master signing keys are generated
     - Which public keys are trusted
     - Whether the satellite auto-registers itself
-
-                                # Satellites do not evaluate petition thresholds; origin is the authority.
-                                # Persist votes and wait for origin to broadcast status changes.
-                                _persist_feeder_block_votes()
     - Verifies signatures
     - Updates TRUSTED_SATELLITES
 - Both tasks run in parallel to the main event loop.
@@ -139,7 +135,7 @@ import urllib.request
 import uuid
 from collections import deque
 from datetime import datetime, timedelta
-from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Protocol, Tuple, TypedDict, Union, cast
+from typing import Any, Awaitable, Callable, Deque, Dict, List, Mapping, Optional, Protocol, Tuple, TypedDict, Union, cast
 
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
@@ -165,6 +161,7 @@ from curses import wrapper
 # RPC protocols, and internal data structures.
 
 # Message payloads for persistent connections
+
 class SyncMessage(TypedDict, total=False):
     """Satellite → Origin status sync message."""
 
@@ -185,6 +182,7 @@ class SyncMessage(TypedDict, total=False):
     storagenode_scores: Dict[str, Dict[str, Any]]  # Reputation scores for storage nodes
 
 # Origin response payloads
+
 class ResponseMessage(TypedDict, total=False):
     """Origin → Satellite response message."""
 
@@ -196,6 +194,7 @@ class ResponseMessage(TypedDict, total=False):
     repair_queue: List[Dict[str, Any]]  # List of unassigned repair jobs available for claiming
 
 # RPC protocol message structures
+
 class StorageRPCRequest(TypedDict, total=False):
     """Storage RPC request structure."""
 
@@ -206,6 +205,7 @@ class StorageRPCRequest(TypedDict, total=False):
     nonce: Optional[str]  # Challenge nonce (for proof-of-storage)
 
 # Repair worker RPC messages
+
 class RepairRPCRequest(TypedDict, total=False):
     """Repair RPC request structure."""
 
@@ -215,6 +215,7 @@ class RepairRPCRequest(TypedDict, total=False):
     reason: Optional[str]  # Failure/completion reason for logging
 
 # Node metadata structures
+
 class NodeInfo(TypedDict, total=False):
     """Node information structure."""
 
@@ -235,6 +236,14 @@ class NodeInfo(TypedDict, total=False):
     uplink_target: Optional[str]  # Uplink target satellite ID
     zone: str  # Geographic zone
     downstream_count: int  # Number of downstream nodes
+
+class NodeState(TypedDict):
+    """Node stability tracking state."""
+
+    last_online: Optional[bool]
+    last_direct: Optional[bool]
+    flip_count_online: int
+    flip_count_direct: int
 
 # Satellite registry information
 class SatelliteInfo(TypedDict, total=False):
@@ -260,6 +269,9 @@ class SatelliteInfo(TypedDict, total=False):
     reachable_self: bool  # Whether origin can reach this satellite directly
     reachable_external_count: int  # Number of external nodes that can reach this satellite
     reachable_confidence: str  # Reachability confidence score
+    total_satellites: int  # Total satellites reported by origin
+    behind_cgnat: bool  # Whether node is behind CGNAT
+    _source: str  # Internal merge/source marker
 
 # Storage node reputation tracking
 class StoragenodeScore(TypedDict, total=False):
@@ -284,6 +296,7 @@ class StoragenodeScore(TypedDict, total=False):
     last_reason: str  # Reason for last score change
     p2p_reachable: Dict[str, bool]  # Reachability from each satellite node
     p2p_last_check: float  # Unix timestamp of last P2P check
+    score_components: Dict[str, float]  # Component breakdown for score
 
 # Repair job tracking
 class RepairJob(TypedDict, total=False):
@@ -346,19 +359,37 @@ class AuditResult(TypedDict, total=False):
 class AsyncStreamReader(Protocol):
     """Typed protocol for async stream readers."""
 
-    async def read(self, n: int) -> bytes: ...
-    async def readexactly(self, n: int) -> bytes: ...
-    async def readline(self) -> bytes: ...
-    async def readuntil(self, separator: bytes = b'\n') -> bytes: ...
+    async def read(self, n: int) -> bytes:
+        """Read up to n bytes from the stream."""
+        ...
+    async def readexactly(self, n: int) -> bytes:
+        """Read exactly n bytes from the stream."""
+        ...
+    async def readline(self) -> bytes:
+        """Read a single line from the stream."""
+        ...
+    async def readuntil(self, separator: bytes = b'\n') -> bytes:
+        """Read until separator is encountered."""
+        ...
 
 class AsyncStreamWriter(Protocol):
     """Typed protocol for async stream writers."""
 
-    def write(self, data: bytes) -> None: ...
-    async def drain(self) -> None: ...
-    def close(self) -> None: ...
-    async def wait_closed(self) -> None: ...
-    def get_extra_info(self, name: str, default: Any = None) -> Any: ...
+    def write(self, data: bytes) -> None:
+        """Write data to the stream."""
+        ...
+    async def drain(self) -> None:
+        """Wait until the write buffer is flushed."""
+        ...
+    def close(self) -> None:
+        """Close the stream."""
+        ...
+    async def wait_closed(self) -> None:
+        """Wait until the stream is closed."""
+        ...
+    def get_extra_info(self, name: str, default: Any = None) -> Any:
+        """Get protocol transport information."""
+        ...
 
 # ============================================================================
 # END TYPE DEFINITIONS
@@ -382,7 +413,7 @@ except Exception:
 
         # Wrapper: adapt easyfec.Encoder to match PyPI zfec API
         def zfec_encode(blocks: list[bytes], blocknums: list[int]) -> list[bytes]:
-            """Encode data blocks using easyfec Reed-Solomon encoder"""
+            """Encode data blocks using easyfec Reed-Solomon encoder."""
             k = len(blocks)  # Required fragments for reconstruction
             n = len(blocknums)  # Total fragments to generate
             data = b"".join(blocks)  # Concatenate blocks for easyfec
@@ -391,7 +422,7 @@ except Exception:
 
         # Wrapper: adapt easyfec.Decoder to match PyPI zfec API
         def zfec_decode(blocks: list[bytes], blocknums: list[int], padlen: int = 0) -> bytes:
-            """Decode fragments back to original data using easyfec"""
+            """Decode fragments back to original data using easyfec."""
             k = len(blocks)  # Required fragments
             n = max(blocknums) + 1 if blocknums else len(blocks)  # Total fragments
             dec = Decoder(k, n)
@@ -401,9 +432,11 @@ except Exception:
     except Exception:
         # Fallback stubs: if zfec unavailable, raise error at fragment creation
         def zfec_encode(blocks: list[bytes], blocknums: list[int]) -> list[bytes]:
+            """Raise error if zfec not available."""
             raise RuntimeError("zfec is not installed. Install via: pip install zfec")
         
         def zfec_decode(blocks: list[bytes], blocknums: list[int], padlen: int = 0) -> bytes:
+            """Raise error if zfec not available."""
             raise RuntimeError("zfec is not installed. Install via: pip install zfec")
         
         _ZFEC_AVAILABLE = False
@@ -435,6 +468,7 @@ VALID_HYBRID_ROLES = {'satellite', 'storagenode', 'repairnode', 'feeder'}  # ori
 def validate_node_mode(mode: str, roles: Optional[List[str]] = None) -> None:
     """
     Validate that NODE_MODE is set to a supported operational mode.
+
     For hybrid mode, also validate the roles array.
     
     Purpose:
@@ -693,7 +727,7 @@ LAST_SYNC_HASH: Dict[str, str | None] = {
 # ============================================================================
 ORIGIN_PUBKEY_URL = "https://raw.githubusercontent.com/boelle/LibreMesh/main/origin_pubkey.pem"
 LIST_JSON_URL    = "https://raw.githubusercontent.com/boelle/LibreMesh/main/trusted-satellites/list.json"
-SYNC_INTERVAL = 300 # Pull list.json every 5 minutes
+SYNC_INTERVAL = 900 # Pull list.json every 15 minutes (optimized from 5 min to reduce polling)
 REGISTRY_ETAG = None  # ETag for GitHub registry fetch optimization
 MAIN_LOOP: Optional[asyncio.AbstractEventLoop] = None
 
@@ -702,9 +736,9 @@ REGISTRY_SOURCE: str = 'none'  # 'seed', 'live', 'none'
 REGISTRY_LAST_LIVE_FETCH: float = 0.0  # Timestamp of last successful live fetch
 REGISTRY_LAST_LIVE_ATTEMPT: float = 0.0  # Timestamp of last live fetch attempt (success or fail)
 REGISTRY_LAST_SEED_LOAD: float = 0.0  # Timestamp of last seed load from GitHub
-REGISTRY_LIVE_FETCH_INTERVAL: float = 120.0  # Refresh every 2 minutes
+REGISTRY_LIVE_FETCH_INTERVAL: float = 300.0  # Refresh every 5 minutes (optimized from 2 min to reduce polling)
 REGISTRY_LIVE_BACKOFF: float = 1.0  # Exponential backoff multiplier (starts at 1.0)
-REGISTRY_LIVE_MAX_BACKOFF: float = 300.0  # Max 5 minutes between retries
+REGISTRY_LIVE_MAX_BACKOFF: float = 600.0  # Max 10 minutes between retries (optimized from 5 min)
 REGISTRY_SEED_TTL: float = 3600.0  # Seed entries expire after 1 hour without live contact
 REGISTRY_SEED_LOADED_TIME: Dict[str, float] = {}  # {sat_id: load_timestamp} for TTL tracking
 
@@ -917,7 +951,7 @@ def decrypt_object(ciphertext: bytes, key: bytes, nonce: Optional[bytes] = None,
     # AES-GCM verifies integrity while decrypting (raises InvalidTag on tamper)
     aesgcm = AESGCM(key)
     pt = aesgcm.decrypt(nonce, ct + tag, None)
-    return cast(bytes, pt)
+    return pt
 
 """
 LOGGING INFRASTRUCTURE
@@ -975,8 +1009,10 @@ def setup_logging(log_level: str = 'INFO') -> Tuple[logging.Logger, logging.Logg
     class JsonFormatter(logging.Formatter):
         """
         Emit structured JSON log lines (timestamp, level, logger, message, exception).
+
         Keeps fields stable for ingestion by log processors and rotation handlers.
         """
+
         def format(self, record: logging.LogRecord) -> str:
             # Build structured JSON object with standard fields
             log_data = {
@@ -1237,6 +1273,7 @@ FEEDER_BLOCK_COOLOFF_DAYS: int = 7
 def validate_feeder_api_key(api_key: str) -> Optional[str]:
     """
     Validate feeder API key and return owner_id on success, None on failure.
+
     Enforces per-feeder rate limiting (requests per minute).
     """
     if not api_key or api_key not in FEEDER_ALLOWLIST:
@@ -1280,7 +1317,7 @@ def validate_feeder_api_key(api_key: str) -> Optional[str]:
 def check_feeder_quota(owner_id: str, additional_bytes: int, additional_objects: int = 1) -> bool:
     """
     Check if feeder can store additional bytes/objects without exceeding quota.
-    
+
     Args:
         owner_id: Feeder identifier
         additional_bytes: Bytes to be added in this operation
@@ -1432,6 +1469,7 @@ FEEDER_INTERVAL_HISTORY: Dict[str, List[float]] = {}  # {ip: [upload timestamps 
 def calculate_spam_score(ip: str, owner_id: str, event_type: str) -> tuple[int, Optional[str]]:
     """
     Calculate spam score (0-10) for an IP based on detected patterns.
+
     Returns: (score, warning_reason or None)
     
     Patterns:
@@ -1586,6 +1624,7 @@ def track_delete_event(owner_id: str) -> None:
 def trigger_spam_detection_test() -> None:
     """
     Spam detection scenarios.
+
     If TEST_E2E_ENABLED is true, still runs stateful patterns against live tables (no external RPCs).
     """
     global TEST_LAST_RESULT, TEST_LAST_DETAILS, TEST_LAST_OBJECT_ID
@@ -1707,6 +1746,7 @@ def trigger_spam_detection_test() -> None:
 def trigger_erasure_coding_policy_test() -> None:
     """
     Test erasure coding policy enforcement (k/n centralization).
+
     Tests: config validation, compliant/non-compliant uploads
     """
     global TEST_LAST_RESULT, TEST_LAST_DETAILS, TEST_LAST_OBJECT_ID
@@ -1782,6 +1822,7 @@ def trigger_erasure_coding_policy_test() -> None:
 def trigger_retention_policy_test() -> None:
     """
     Test retention_days policy enforcement (retention centralization).
+
     Tests: config validation, compliant/non-compliant deletes
     """
     global TEST_LAST_RESULT, TEST_LAST_DETAILS, TEST_LAST_OBJECT_ID
@@ -1853,6 +1894,7 @@ def trigger_retention_policy_test() -> None:
 def trigger_rate_limiting_policy_test() -> None:
     """
     Test rate_limit_per_minute policy enforcement (rate limiting centralization).
+
     Tests: config validation, per-feeder tracking, window reset, multiple feeders
     """
     global TEST_LAST_RESULT, TEST_LAST_DETAILS, TEST_LAST_OBJECT_ID
@@ -1964,6 +2006,7 @@ def trigger_rate_limiting_policy_test() -> None:
 def trigger_full_file_restoration_test() -> None:
     """
     Full file restoration (real E2E when enable_e2e_tests=true).
+
     When E2E enabled: creates temp file, uploads to local storage, soft-deletes, restores, verifies checksum.
     """
     global TEST_LAST_RESULT, TEST_LAST_DETAILS, TEST_LAST_OBJECT_ID
@@ -2088,6 +2131,7 @@ def trigger_full_file_restoration_test() -> None:
 def trigger_ghost_feeder_detection_test() -> None:
     """
     Ghost feeder detection (machine fingerprint verification).
+
     Tests: bootstrap, same machine, new machine grace, grace expiry, whitelist override.
     """
     global TEST_LAST_RESULT, TEST_LAST_DETAILS, TEST_LAST_OBJECT_ID
@@ -2305,7 +2349,7 @@ UI_NOTIFICATIONS: asyncio.Queue[Any] = asyncio.Queue(maxsize=20)
 TRUSTED_SATELLITES: Dict[str, SatelliteInfo] = {}
 
 # Bidirectional reachability matrix: {(repair_id, storage_id): {"repair_to_storage": bool, "storage_to_repair": bool, "last_check": timestamp}}
-REACHABILITY_MATRIX: Dict[tuple, Dict[str, Any]] = {}
+REACHABILITY_MATRIX: Dict[tuple[str, str], Dict[str, Any]] = {}
 
 # Origin relay metrics (TASK 2e)
 RELAY_USAGE: Dict[str, int] = {"total_repairs": 0, "relay_used": 0}  # Track relay usage percentage
@@ -2351,7 +2395,7 @@ LOG_VIEW_SELECTION: str = "merged"  # merged | control | storage | repair
 
 # --- External Configuration (grouped defaults + overrides) ---
 # Define grouped defaults for clarity; config.json overrides them.
-DEFAULTS = {
+DEFAULTS: Dict[str, Any] = {
   "node": {
     "name": SATELLITE_NAME,
     "mode": NODE_MODE,
@@ -2469,9 +2513,7 @@ except Exception:
     pass
 
 def auto_detect_node_id_and_port(node_mode: str, config: dict[str, Any]) -> tuple[str, int]:
-    """
-    Auto-detect next available node ID and listen port at startup.
-    """
+    """Auto-detect next available node ID and listen port at startup."""
     port_bases = {
         'satellite': 8800,
         'repairnode': 10800,
@@ -3146,8 +3188,8 @@ def get_gc_stats() -> Dict[str, Any]:
 
 def run_garbage_collector_once() -> Dict[str, Any]:
     """
-    Synchronous helper to run one GC iteration (for testing).
-    
+    Run one GC iteration for testing.
+
     Returns dict with cleanup stats.
     Now also creates deletion jobs (matches async garbage_collector).
     """
@@ -3947,7 +3989,7 @@ def _safe_extract_tar(tar: Any, destination: str) -> None:
 
 
 def _download_and_prepare_geoip_sync(target_path: str) -> tuple[bool, str]:
-    """Synchronous download: GeoLite2 tarball, extract MMDB, place it. Returns (success, error_msg)."""
+    """Download GeoLite2 tarball, extract MMDB, and place it. Returns (success, error_msg)."""
     import shutil
     import tarfile
     import tempfile
@@ -4440,7 +4482,8 @@ def check_smartctl_available() -> bool:
 
 def get_disk_health_cached() -> float:
     """
-    Get disk health with smart caching:
+    Get disk health with smart caching.
+
     - First 5 minutes: fresh check every call
     - After 5 minutes: cache for 5 minutes between checks
     
@@ -4527,7 +4570,7 @@ def get_disk_health() -> float:
         return 0.7
 
 
-def get_disk_health_diagnostic() -> dict:
+def get_disk_health_diagnostic() -> dict[str, Any]:
     """
     Get disk health score and diagnostic information about how it was calculated.
     
@@ -4574,7 +4617,7 @@ def get_disk_health_diagnostic() -> dict:
             attempts.append("Could not detect primary disk")
         
         # Fallback: check if storage path is on mergerfs and query underlying disks
-        disk_results = []
+        disk_results: list[dict[str, Any]] = []
         
         # Check if it's definitely a mergerfs mount (could be parent directory)
         is_mergerfs = False
@@ -4624,13 +4667,20 @@ def get_disk_health_diagnostic() -> dict:
                 })
             
             if disk_results and any(d['score'] is not None for d in disk_results):
-                health_scores = [d['score'] for d in disk_results if d['score'] is not None]
+                health_scores: list[float] = [
+                    float(d['score'])
+                    for d in disk_results
+                    if d['score'] is not None
+                ]
                 final_score = min(health_scores) if health_scores else 1.0
-                worst_disk = [d for d in disk_results if d['score'] == final_score][0] if disk_results else None
+                worst_disk = (
+                    [d for d in disk_results if float(d['score']) == final_score][0]
+                    if disk_results else None
+                )
                 
                 # Only mention limiting factor if there's an actual issue (score < 1.0)
                 limiting_factor_msg = ""
-                if worst_disk and worst_disk['score'] < 1.0:
+                if worst_disk and float(worst_disk['score']) < 1.0:
                     limiting_factor_msg = f" (limiting factor: {worst_disk['device']})"
                 
                 return {
@@ -4701,6 +4751,7 @@ def get_disk_health_diagnostic() -> dict:
 def _query_smartctl_status_with_error(device: Optional[str] = None) -> Tuple[Optional[float], str]:
     """
     Query smartctl and parse SMART health status for a device.
+
     Returns both the score and detailed error information if it failed.
     
     Parameters:
@@ -4905,7 +4956,7 @@ def _find_mergerfs_mount_point(start_path: str) -> Optional[str]:
         return None
 
 
-def _detect_mergerfs_disks(mount_path: str) -> list:
+def _detect_mergerfs_disks(mount_path: str) -> list[str]:
     """
     Detect underlying disks for mergerfs mount (handles both traditional mergerfs and FUSE.MERGERFS).
     
@@ -5283,8 +5334,12 @@ def apply_feeder_block_votes_from_source(feeder_block_votes: Dict[str, Any], sou
                 # Ensure removed tombstones map exists
                 existing_removed = existing.setdefault("block_votes_removed", {})
                 
+                # If origin says feeder is active, clear stale votes on satellites
+                if source_is_origin and incoming_status == "active":
+                    existing["block_votes"] = {}
+                    existing_removed.clear()
                 # If status changed to "blocked" with cooloff, replace votes (don't merge)
-                if incoming_status == "blocked" and "petition_rejected_at" in vote_data:
+                elif incoming_status == "blocked" and "petition_rejected_at" in vote_data:
                     # Origin rejected petition - use their vote state (clear dissent votes)
                     existing["block_votes"] = incoming_votes.copy() if incoming_votes else {}
                     # Also take over removed tombstones from origin
@@ -5477,6 +5532,7 @@ def _persist_feeder_block_votes() -> None:
 def vote_to_block_feeder(owner_id: str, reason: str = "spam_detected") -> bool:
     """
     Satellite votes to block a feeder. Broadcasts vote via sync.
+
     Returns True if vote recorded successfully.
     """
     global FEEDER_BLOCK_VOTES
@@ -5509,6 +5565,7 @@ def vote_to_block_feeder(owner_id: str, reason: str = "spam_detected") -> bool:
 def check_feeder_block_threshold(owner_id: str) -> bool:
     """
     Origin checks if feeder has enough votes to auto-block.
+
     Criteria: >50% voting nodes (satellites + origin) + at least 1 vote from each zone with voting nodes.
     Returns True if auto-blocked.
     """
@@ -5572,6 +5629,7 @@ def check_feeder_block_threshold(owner_id: str) -> bool:
 def force_block_feeder(owner_id: str, reason: str = "operator_decision") -> bool:
     """
     Origin operator force-blocks a feeder immediately without voting.
+
     Returns True if blocked successfully.
     """
     global FEEDER_BLOCK_VOTES, FEEDER_ALLOWLIST
@@ -5610,6 +5668,7 @@ def force_block_feeder(owner_id: str, reason: str = "operator_decision") -> bool
 def petition_feeder_unblock(owner_id: str, petitioner_sat_id: str) -> bool:
     """
     Satellite petitions origin to reconsider a block.
+
     Requires >75% satellites to disagree with the block (not have voted).
     Returns True if petition accepted (cooloff check passed).
     """
@@ -5664,6 +5723,7 @@ def petition_feeder_unblock(owner_id: str, petitioner_sat_id: str) -> bool:
 def resolve_feeder_petition(owner_id: str, decision: str, operator_reason: str = "") -> bool:
     """
     Origin operator resolves a petition: 'unblock' or 'keep_blocked'.
+
     Returns True if resolved successfully.
     """
     global FEEDER_BLOCK_VOTES, FEEDER_ALLOWLIST, _CONFIG
@@ -5722,6 +5782,7 @@ def resolve_feeder_petition(owner_id: str, decision: str, operator_reason: str =
 async def feeder_block_vote_checker(interval_seconds: int = 10) -> None:
     """
     Background task: Periodically check voting thresholds and auto-block feeders.
+
     Runs on origin only, every 10 seconds.
     """
     if not IS_ORIGIN:
@@ -6383,15 +6444,24 @@ def claim_repair_job(worker_id: str, worker_mode: str = 'satellite') -> Optional
             job = cursor.fetchone()
             logger_repair.debug(f"[CLAIM] Fallback query: {'FOUND' if job else 'NOT FOUND'}")
             if job:
-                job_id, object_id, fragment_index = job
+                job_id_raw, object_id_raw, fragment_index_raw = job
+                job_id = cast(str, job_id_raw)
+                object_id = cast(str, object_id_raw)
+                fragment_index = int(fragment_index_raw)
         
         if not job_id:
             logger_repair.debug(f"[CLAIM] No pending jobs available for {worker_id[:20]} - rolling back")
             conn.rollback()
             conn.close()
             return None
-        
-        logger_repair.debug(f"[CLAIM] Found job: {job_id[:8]} ({object_id[:16]}/frag{fragment_index}) - updating...")
+
+        assert object_id is not None
+        job_id_str = cast(str, job_id)
+        object_id_str = cast(str, object_id)
+
+        logger_repair.debug(
+            f"[CLAIM] Found job: {job_id_str[:8]} ({object_id_str[:16]}/frag{fragment_index}) - updating..."
+        )
         
         # Atomically claim it (all within IMMEDIATE transaction)
         try:
@@ -6404,19 +6474,21 @@ def claim_repair_job(worker_id: str, worker_mode: str = 'satellite') -> Optional
                     attempts = attempts + 1
                 WHERE job_id = ?
             """, (worker_id, now, lease_expires, job_id))
-            logger_repair.debug(f"[CLAIM] UPDATE executed for job {job_id[:8]}")
+            logger_repair.debug(f"[CLAIM] UPDATE executed for job {job_id_str[:8]}")
         except Exception as update_err:
-            logger_repair.error(f"[CLAIM] UPDATE failed for job {job_id[:8]}: {update_err}")
+            logger_repair.error(f"[CLAIM] UPDATE failed for job {job_id_str[:8]}: {update_err}")
             raise
         
         try:
             conn.commit()
-            logger_repair.debug(f"[CLAIM] Transaction committed for job {job_id[:8]}")
+            logger_repair.debug(f"[CLAIM] Transaction committed for job {job_id_str[:8]}")
         except Exception as commit_err:
-            logger_repair.error(f"[CLAIM] COMMIT failed for job {job_id[:8]}: {commit_err}")
+            logger_repair.error(f"[CLAIM] COMMIT failed for job {job_id_str[:8]}: {commit_err}")
             raise
         
-        logger_repair.info(f"Job CLAIMED: {job_id[:8]} for {object_id[:16]}/frag{fragment_index} by {worker_id[:20]}")
+        logger_repair.info(
+            f"Job CLAIMED: {job_id_str[:8]} for {object_id_str[:16]}/frag{fragment_index} by {worker_id[:20]}"
+        )
         
         # Increment round-robin index ONLY after successful claim by a repairnode
         if worker_mode == 'repairnode':
@@ -6922,9 +6994,7 @@ def cleanup_repair_db(purge_completed: bool = True, purge_failed: bool = True, m
     return summary
 
 def compute_repair_capability() -> None:
-    """
-    Compute and update REPAIR_CAPABILITY status.
-    """
+    """Compute and update REPAIR_CAPABILITY status."""
     if not IS_ORIGIN:
         return
 
@@ -7510,8 +7580,9 @@ async def expire_stale_leases() -> None:
 # --- Fragmenter: Reed-Solomon k-of-n ---
 def make_fragments(data_bytes: bytes, k: int, n: int) -> List[bytes]:
     """
-    Encode a byte string into n Reed-Solomon fragments such that any k fragments
-    can reconstruct the original. Uses zfec for erasure coding.
+    Encode a byte string into n Reed-Solomon fragments.
+
+    Any k fragments can reconstruct the original. Uses zfec for erasure coding.
 
     Parameters:
     - data_bytes: source bytes to fragment
@@ -7907,7 +7978,7 @@ async def audit_storagenode(sat_id: str) -> AuditResult:
 
 async def probe_repair_to_storage(repair_id: str, storage_id: str) -> bool:
     """
-    Repair node probes: "Can I reach this storage node to pull fragments?"
+    Repair node probes: "Can I reach this storage node to pull fragments?".
     
     Purpose:
     - Repair node checks if it can establish bidirectional connection to storage node
@@ -7928,7 +7999,12 @@ async def probe_repair_to_storage(repair_id: str, storage_id: str) -> bool:
             return False
         
         hostname = storage_info.get('hostname')
-        storage_port = storage_info.get('storage_port', STORAGE_RPC_PORT)
+        storage_port_raw = storage_info.get('storage_port', STORAGE_PORT)
+        storage_port = (
+            int(storage_port_raw)
+            if isinstance(storage_port_raw, (int, float, str))
+            else STORAGE_PORT
+        )
         
         if not hostname:
             logger_control.debug(f"Probe {repair_id}→{storage_id}: No hostname in registry")
@@ -7954,7 +8030,7 @@ async def probe_repair_to_storage(repair_id: str, storage_id: str) -> bool:
 
 async def probe_storage_to_repair(storage_id: str, repair_id: str) -> bool:
     """
-    Storage node probes: "Can I reach this repair node to push fragments?"
+    Storage node probes: "Can I reach this repair node to push fragments?".
     
     Purpose:
     - Storage node checks if it can establish bidirectional connection to repair node
@@ -7975,7 +8051,12 @@ async def probe_storage_to_repair(storage_id: str, repair_id: str) -> bool:
             return False
         
         hostname = repair_info.get('hostname')
-        repair_port = repair_info.get('repair_port', REPAIR_RPC_PORT)
+        repair_port_raw = repair_info.get('repair_port', REPAIR_RPC_PORT)
+        repair_port = (
+            int(repair_port_raw)
+            if isinstance(repair_port_raw, (int, float, str))
+            else REPAIR_RPC_PORT
+        )
         
         if not hostname:
             logger_control.debug(f"Probe {storage_id}→{repair_id}: No hostname in registry")
@@ -8095,10 +8176,10 @@ def choose_repair_path(repair_id: str, storage_ids: List[str]) -> Dict[str, Any]
     """
     try:
         # Count viable paths for each storage node
-        direct_targets = []
-        push_targets = []
-        relay_targets = []
-        unreachable = []
+        direct_targets: list[str] = []
+        push_targets: list[str] = []
+        relay_targets: list[str] = []
+        unreachable: list[str] = []
         
         for storage_id in storage_ids:
             key = (repair_id, storage_id)
@@ -8266,7 +8347,12 @@ async def relay_fragment_from_storage(storage_id: str, object_id: str, fragment_
             return None
         
         hostname = storage_info.get('hostname')
-        port = storage_info.get('storage_port', STORAGE_RPC_PORT)
+        port_raw = storage_info.get('storage_port', STORAGE_PORT)
+        port = (
+            int(port_raw)
+            if isinstance(port_raw, (int, float, str))
+            else STORAGE_PORT
+        )
         
         if not hostname or not port:
             logger_repair.warning(f"Relay: Storage {storage_id} missing hostname/port")
@@ -8756,6 +8842,7 @@ def update_disk_health(sat_id: str, health_score: float) -> None:
 def recalculate_storagenode_score_components(sat_id: str) -> None:
     """
     Recalculate score components for a storage node without needing audit data.
+
     Called when disk_health or other metrics are updated via heartbeat.
     
     Purpose:
@@ -9406,6 +9493,7 @@ async def safe_send_payload(reader_writer: Tuple[AsyncStreamReader, AsyncStreamW
 def expire_stale_seed_entries() -> int:
     """
     Remove seed entries that haven't had live contact within TTL.
+
     Returns count of expired entries.
     """
     global TRUSTED_SATELLITES, REGISTRY_SEED_LOADED_TIME
@@ -9427,6 +9515,7 @@ def expire_stale_seed_entries() -> int:
 async def sync_registry_from_github() -> None:
     """
     STEP 3a: Periodically fetches the trusted satellites registry from GitHub.
+
     Seed/fallback only - prefer live registry from origin RPC.
 
     Purpose:
@@ -9474,7 +9563,6 @@ async def sync_registry_from_github() -> None:
     - This function is advisory and maintenance-focused.
     - Errors in fetching do not halt the satellite; they are logged for operator awareness.
     """
-    
     global REGISTRY_ETAG, REGISTRY_LIVE_BACKOFF, REGISTRY_LAST_LIVE_FETCH, REGISTRY_LAST_LIVE_ATTEMPT, REGISTRY_SOURCE, REGISTRY_LAST_SEED_LOAD
     
     while True:
@@ -9753,7 +9841,13 @@ def load_trusted_satellites(source: str = 'seed') -> Dict[str, SatelliteInfo]:
         return TRUSTED_SATELLITES
 
     try:
-        public_key = serialization.load_pem_public_key(ORIGIN_PUBKEY_PEM, backend=default_backend())
+        public_key_raw = serialization.load_pem_public_key(
+            ORIGIN_PUBKEY_PEM,
+            backend=default_backend()
+        )
+        if not isinstance(public_key_raw, rsa.RSAPublicKey):
+            raise ValueError("Origin public key must be RSA")
+        public_key = public_key_raw
         signature_b64 = signed_data.get('signature')
         if not signature_b64:
             raise ValueError("Missing signature in registry file")
@@ -9854,13 +9948,20 @@ def sign_and_save_satellite_list() -> None:
     global LIST_UPDATED_PENDING_SAVE
     if not IS_ORIGIN or not ORIGIN_PRIVKEY_PEM: return
     try:
-        private_key = serialization.load_pem_private_key(ORIGIN_PRIVKEY_PEM, password=None, backend=default_backend())
+        private_key_raw = serialization.load_pem_private_key(
+            ORIGIN_PRIVKEY_PEM,
+            password=None,
+            backend=default_backend()
+        )
+        if not isinstance(private_key_raw, rsa.RSAPrivateKey):
+            raise ValueError("Origin private key must be RSA")
+        private_key = private_key_raw
 
         # Separate satellites from repair nodes
         satellites = [sat for sat_id, sat in TRUSTED_SATELLITES.items() if sat.get('mode') != 'repairnode']
         repair_nodes = [sat for sat_id, sat in TRUSTED_SATELLITES.items() if sat.get('mode') == 'repairnode']
 
-        def strip_to_identity(sat: Dict[str, Any], mode: str) -> Dict[str, Any]:
+        def strip_to_identity(sat: Mapping[str, Any], mode: str) -> Dict[str, Any]:
             # mode: 'public' or 'internal'
             # For public: use advertised_ip if present, else detected IP
             # For internal: always use detected IP
@@ -9997,7 +10098,7 @@ def generate_keys_and_certs() -> Tuple[str, str]:
     with open(CERT_PATH, 'rb') as f:
         cert = x509.load_pem_x509_certificate(f.read(), default_backend())
     cn_attrs = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
-    SATELLITE_ID = cn_attrs[0].value if cn_attrs else str(SATELLITE_NAME)
+    SATELLITE_ID = str(cn_attrs[0].value) if cn_attrs else str(SATELLITE_NAME)
     TLS_FINGERPRINT = base64.b64encode(cert.fingerprint(hashes.SHA256())).decode('utf-8')
     ADVERTISED_IP = get_local_ip()
 
@@ -10014,7 +10115,7 @@ def get_fragment_path(object_id: str, fragment_index: int) -> str:
     return os.path.join(FRAGMENTS_PATH, str(object_id), f"{fragment_index}.bin")
 
 async def put_fragment(hostname: str, port: int, object_id: str, fragment_index: int, data: bytes, expected_fingerprint: Optional[str] = None) -> bool:
-    """
+    r"""
     Send a fragment to a remote storage node.
     
     Purpose:
@@ -10165,6 +10266,7 @@ async def list_fragments(hostname: str, port: int, object_id: str, expected_fing
 async def store_object_fragments(object_id: str, data: bytes, k: int = 0, n: int = 0, adaptive: bool = True) -> Dict[int, Dict[str, Any]]:
     """
     Fragment an object and place shards across storagenodes.
+
     Integrated with versioning and manifest tracking.
     Adaptive redundancy selection based on available storagenodes.
 
@@ -10326,6 +10428,7 @@ def trigger_placement_test() -> None:
 async def run_placement_smoketest() -> None:
     """
     Generate a test object, store fragments via normal pipeline, and verify.
+
     - Uses explicit k/n (3/5) to keep verification simple.
     - Only runs on origin and when TEST_FEATURES_ENABLED is true.
     """
@@ -10354,28 +10457,22 @@ async def run_placement_smoketest() -> None:
     results = await store_object_fragments(object_id, data, k=k, n=n, adaptive=False)
 
     ok_count = sum(1 for r in results.values() if r.get('status') == 'ok')
-    placements = {idx: r.get('sat_id') for idx, r in results.items()}
+    placements: Dict[int, str | None] = {idx: r.get('sat_id') for idx, r in results.items()}
     
-    # Diagnostic: log failure reasons
-    for idx, r in results.items():
-        if r.get('status') != 'ok':
-            logger_storage.warning(f"Test: fragment {idx} placement failed: {r.get('reason')}")
-
     # Attempt verification by fetching any k shards and reconstructing
     shards: Dict[int, bytes] = {}
-    for idx, sat_id in placements.items():
-        if not isinstance(sat_id, str):
+    for idx, sat_id_raw in placements.items():
+        if not isinstance(sat_id_raw, str):
             continue
-        info_raw = TRUSTED_SATELLITES.get(sat_id, {})
-        info = cast(SatelliteInfo, info_raw)
+        sat_id = sat_id_raw
+        info = TRUSTED_SATELLITES.get(sat_id, {})
         host_val = info.get('hostname') or info.get('ip')
-        if not host_val or not isinstance(host_val, str):
-            host = ADVERTISED_IP
-        else:
-            host = host_val
+        host = host_val if isinstance(host_val, str) else ADVERTISED_IP
+        if not isinstance(host, str) or not host:
+            continue
         port = int(info.get('storage_port', 0) or 0)
         peer_fp = info.get('fingerprint')
-        if not host or port <= 0:
+        if port <= 0:
             continue
         try:
             frag = await get_fragment(host, port, object_id, idx, expected_fingerprint=peer_fp)
@@ -10433,8 +10530,8 @@ def trigger_kn_reconstruction_test() -> None:
 
 async def run_kn_reconstruction_test() -> None:
     """
-    Unit test for k/n metadata in reconstruction.
-    
+    Test k/n metadata in reconstruction.
+
     Test steps:
     1. Store object with explicit k=4, n=6 (non-standard)
     2. Verify k/n are saved in OBJECT_MANIFESTS
@@ -10499,8 +10596,11 @@ async def run_kn_reconstruction_test() -> None:
     for idx, sat_id in placements.items():
         if not isinstance(sat_id, str):
             continue
-        info = cast(SatelliteInfo, TRUSTED_SATELLITES.get(sat_id, {}))
-        host = info.get('hostname') or info.get('ip') or ADVERTISED_IP
+        info = TRUSTED_SATELLITES.get(sat_id, {})
+        host_val = info.get('hostname') or info.get('ip') or ADVERTISED_IP
+        if not isinstance(host_val, str):
+            continue
+        host = host_val
         port = int(info.get('storage_port', 0) or 0)
         peer_fp = info.get('fingerprint')
         if not host or port <= 0:
@@ -10554,8 +10654,8 @@ def trigger_connectivity_test() -> None:
 
 async def run_connectivity_test() -> None:
     """
-    Persistent Connection Health Test (Redesigned for CGNAT Architecture)
-    
+    Test persistent connection health (Redesigned for CGNAT Architecture).
+
     Validates that all nodes maintain healthy persistent control connections to origin.
     This test reflects the actual architecture where:
     - Nodes initiate outbound TLS connections to origin (works behind CGNAT)
@@ -10685,6 +10785,8 @@ def trigger_storage_path_test() -> None:
 
 async def run_storage_path_test() -> None:
     """
+    Test storage path for each storagenode.
+
     For each storagenode:
     - PUT tiny fragment
     - GET to verify
@@ -10733,6 +10835,7 @@ async def run_storage_path_test() -> None:
 async def _cleanup_repair_jobs_for_object(object_id: str) -> None:
     """
     Delete all repair jobs for a test object from the database.
+
     This prevents test runs from accumulating orphaned jobs.
     """
     try:
@@ -10765,7 +10868,9 @@ def trigger_repair_test() -> None:
 
 async def run_repair_test() -> None:
     """
-    Test repair workflow:
+    Test repair workflow.
+
+    Test steps:
     1. Store test object (k=3, n=5)
     2. Delete one fragment from a storagenode
     3. Trigger health check / create repair job
@@ -10833,7 +10938,7 @@ async def run_repair_test() -> None:
         if not isinstance(sat_id, str):
             continue
         info_raw = TRUSTED_SATELLITES.get(sat_id, {})
-        info = cast(SatelliteInfo, info_raw)
+        info = info_raw
         host_val = info.get('hostname')
         if not host_val or not isinstance(host_val, str):
             continue
@@ -10874,9 +10979,7 @@ async def run_repair_test() -> None:
 
 
 async def run_repairnode_priority_test() -> None:
-    """
-    [R] Repair-node priority test: ensure repair jobs are claimed by repair nodes (if present).
-    """
+    """[R] Repair-node priority test: ensure repair jobs are claimed by repair nodes (if present)."""
     global TEST_LAST_OBJECT_ID, TEST_LAST_RESULT, TEST_LAST_DETAILS
     TEST_LAST_DETAILS.clear()
     try:
@@ -10957,7 +11060,9 @@ async def run_repairnode_priority_test() -> None:
 
 async def run_repair_round_robin_test() -> None:
     """
-    [N] Repair round-robin claim distribution test:
+    [N] Repair round-robin claim distribution test.
+
+    Test requirements:
     - Requires origin
     - Requires at least 2 online repair nodes (last_seen < 60s)
     - Enqueues multiple jobs and verifies claims come from >1 repair node
@@ -11046,8 +11151,8 @@ def trigger_connection_lifecycle_test() -> None:
 
 async def run_connection_lifecycle_test() -> None:
     """
-    Connection Lifecycle Stability Test
-    
+    Test connection lifecycle stability.
+
     Monitor all node connections for 60 seconds and detect:
     - Frequent reconnections (storage node heartbeat loop issue)
     - Connection drops (unexpected closes)
@@ -11184,7 +11289,9 @@ def trigger_auditor_test() -> None:
 
 async def run_auditor_test() -> None:
     """
-    Test proof-of-storage challenges:
+    Test proof-of-storage challenges.
+
+    Test steps:
     1. For a test object with known fragments, send CHALLENGE RPC
     2. Verify node responds correctly with challenge_response
     3. Confirm nodes actually hold the fragments
@@ -11268,7 +11375,9 @@ def trigger_gc_test() -> None:
 
 async def run_gc_test() -> None:
     """
-    Test garbage collection:
+    Test garbage collection.
+
+    Test steps:
     1. Store test object
     2. Soft-delete it (moves to trash)
     3. Verify it's in trash bucket
@@ -11345,7 +11454,9 @@ def trigger_distributed_deletion_gc_test() -> None:
 
 async def run_distributed_deletion_gc_test() -> None:
     """
-    Steps:
+    Test distributed deletion and GC.
+
+    Test steps:
     1) Store a small test object (k=3, n=5)
     2) Soft-delete it and trigger single GC pass to enqueue deletion jobs
     3) Poll deletion_jobs until all for this object are not pending/claimed
@@ -11480,7 +11591,9 @@ def trigger_feeder_test() -> None:
 
 async def run_feeder_test() -> None:
     """
-    Test feeder RPC end-to-end workflow:
+    Test feeder RPC end-to-end workflow.
+
+    Test steps:
     1. Get feeder API key from config
     2. Upload a test fragment
     3. List objects (verify it appears)
@@ -11633,7 +11746,9 @@ async def run_feeder_test() -> None:
 
 async def run_adaptive_test() -> None:
     """
-    Test adaptive redundancy selection:
+    Test adaptive redundancy selection.
+
+    Test steps:
     1. Check current node availability
     2. Call adaptive_redundancy_target() to get recommended k/n
     3. Store test object with adaptive=True (auto k/n)
@@ -12382,6 +12497,7 @@ async def probe_storagenode_p2p_connectivity(source_id: str, target_id: str) -> 
 async def fetch_live_satellite_list_from_origin(origin_hostname: Optional[str] = None, origin_port: Optional[int] = None, origin_fingerprint: Optional[str] = None) -> bool:
     """
     Fetch live satellite registry from origin via RPC.
+
     Primary registry source (prefer over GitHub seed)
     
     Purpose:
@@ -12517,6 +12633,7 @@ async def fetch_live_satellite_list_from_origin(origin_hostname: Optional[str] =
 async def handle_get_live_satellite_list(writer: AsyncStreamWriter, peer_ip: str) -> None:
     """
     Handle get_live_satellite_list RPC from satellites/storagenodes.
+
     Returns current registry with live metrics (no auth required).
     """
     try:
@@ -12558,7 +12675,6 @@ async def handle_get_live_satellite_list(writer: AsyncStreamWriter, peer_ip: str
         logger_control.warning(f"Failed to send live satellite list to {peer_ip}: {e}")
 
 async def handle_node_sync(reader: AsyncStreamReader, writer: AsyncStreamWriter) -> None:
-    global DOWNSTREAM_CONNECTIONS
     """
     STEP 6: Handle inbound satellite → origin synchronization connections.
 
@@ -13021,16 +13137,16 @@ async def handle_node_sync(reader: AsyncStreamReader, writer: AsyncStreamWriter)
                         "storagenode_scores": STORAGENODE_SCORES,
                         "limits": _CONFIG.get("limits", DEFAULTS.get("limits", {})),
                         "placement": PLACEMENT_SETTINGS,
-                            "feeder_api_keys": _CONFIG.get("feeder", {}).get("api_keys") or FEEDER_SEED_KEYS_DEFAULT,
+                        "feeder_api_keys": _CONFIG.get("feeder", {}).get("api_keys") or FEEDER_SEED_KEYS_DEFAULT,
                     }
                     
                     # Check petition thresholds before broadcasting (Task 9)
-                    for owner_id, data in FEEDER_BLOCK_VOTES.items():
-                        if data.get("block_status") == "blocked":
+                    for owner_id, vote_data in FEEDER_BLOCK_VOTES.items():
+                        if vote_data.get("block_status") == "blocked":
                             # First check if cooloff is active - if so, skip threshold check entirely
-                            last_rejected_petition = data.get("petition_rejected_at")
+                            last_rejected_petition = vote_data.get("petition_rejected_at")
                             if not last_rejected_petition:
-                                for petition in data.get("block_petition_history", []):
+                                for petition in vote_data.get("block_petition_history", []):
                                     if "origin_decision" in petition and petition["origin_decision"] == "keep_blocked":
                                         if not last_rejected_petition or petition["timestamp"] > last_rejected_petition:
                                             last_rejected_petition = petition["timestamp"]
@@ -13043,11 +13159,11 @@ async def handle_node_sync(reader: AsyncStreamReader, writer: AsyncStreamWriter)
                             
                             # Only check threshold if cooloff is NOT active
                             if not cooloff_active:
-                                votes = data.get("block_votes", {})
+                                votes = vote_data.get("block_votes", {})
                                 dissent_votes = len([k for k in votes.keys() if k.startswith("dissent_")])
                                 total_sats = len([s for s, info in TRUSTED_SATELLITES.items() if info.get('mode') == 'satellite'])
                                 if total_sats > 0 and dissent_votes / total_sats > 0.75:
-                                    data["block_status"] = "appealing"
+                                    vote_data["block_status"] = "appealing"
                                     _persist_feeder_block_votes()
                     
                     response["feeder_block_votes"] = FEEDER_BLOCK_VOTES  # Task 9: propagate voting state
@@ -13121,6 +13237,9 @@ async def handle_node_sync(reader: AsyncStreamReader, writer: AsyncStreamWriter)
                         # Merge feeder block votes from satellite into origin
                         if IS_ORIGIN and "feeder_block_votes" in payload:
                             apply_feeder_block_votes_from_source(payload.get("feeder_block_votes", {}), source_is_origin=False)
+                        # Satellites: apply feeder block votes from origin (authoritative)
+                        if not IS_ORIGIN and "feeder_block_votes" in payload:
+                            apply_feeder_block_votes_from_source(payload.get("feeder_block_votes", {}), source_is_origin=True)
 
                     # Satellite: track downstream peer presence locally for UI summary
                     # Preserve storagenode classification across heartbeats even if payload omits storage_port
@@ -13219,10 +13338,17 @@ async def handle_node_sync(reader: AsyncStreamReader, writer: AsyncStreamWriter)
                                               if info.get('mode') == 'satellite']) + 1
                         
                         # Safe metric defaults if origin self-entry missing
-                        origin_metrics = TRUSTED_SATELLITES.get(SATELLITE_ID, {}).get("metrics", get_system_metrics())
-                        origin_repair_metrics = TRUSTED_SATELLITES.get(SATELLITE_ID, {}).get("repair_metrics", {})
+                        origin_info = TRUSTED_SATELLITES.get(SATELLITE_ID) if SATELLITE_ID else None
+                        origin_metrics = (
+                            origin_info.get("metrics", get_system_metrics())
+                            if origin_info else get_system_metrics()
+                        )
+                        origin_repair_metrics = (
+                            origin_info.get("repair_metrics", {})
+                            if origin_info else {}
+                        )
 
-                        response = {
+                        response_payload: Dict[str, Any] = {
                             "type": "response",
                             "metrics": origin_metrics,
                             "repair_metrics": origin_repair_metrics,
@@ -13240,8 +13366,10 @@ async def handle_node_sync(reader: AsyncStreamReader, writer: AsyncStreamWriter)
                             "feeder_block_votes": FEEDER_BLOCK_VOTES,  # Task 9: propagate voting state
                             "total_satellites": total_satellites  # Total satellite count for consistent vote percentages
                         }
-                        logger_control.debug(f"Response keys: {list(response.keys())}, satellites count in payload: {len(response.get('satellites', {}))}")
-                        writer.write((json.dumps(response) + "\n").encode())
+                        logger_control.debug(
+                            f"Response keys: {list(response_payload.keys())}, satellites count in payload: {len(response_payload.get('satellites', {}))}"
+                        )
+                        writer.write((json.dumps(response_payload) + "\n").encode())
                         await writer.drain()
                 
                 elif sync_type == "full":
@@ -13294,7 +13422,7 @@ async def handle_node_sync(reader: AsyncStreamReader, writer: AsyncStreamWriter)
                         }
                         
                         if existing_sat2 is None:
-                            new_sat: SatelliteInfo = cast(SatelliteInfo, {**base_details, "last_seen": time.time()})
+                            new_sat = cast(SatelliteInfo, {**base_details, "last_seen": time.time()})
                             TRUSTED_SATELLITES[sat_id] = new_sat
                             reachable = await probe_storage_reachability(sat_id, ip, storage_port, control_port=port)
                             TRUSTED_SATELLITES[sat_id]['reachable_direct'] = reachable
@@ -13304,10 +13432,10 @@ async def handle_node_sync(reader: AsyncStreamReader, writer: AsyncStreamWriter)
                             existing_cmp = {k: v for k, v in existing_sat2.items() if k not in ("last_seen", "reachable_direct")}
                             new_cmp = {k: v for k, v in base_details.items() if k not in ("last_seen", "reachable_direct")}
                             if existing_cmp != new_cmp:
-                                updated_details = {**existing_sat2, **base_details, "last_seen": time.time()}
+                                updated_details = cast(SatelliteInfo, {**existing_sat2, **base_details, "last_seen": time.time()})
                                 reachable = await probe_storage_reachability(sat_id, ip, storage_port, control_port=port)
                                 updated_details['reachable_direct'] = reachable
-                                TRUSTED_SATELLITES[sat_id] = cast(SatelliteInfo, updated_details)
+                                TRUSTED_SATELLITES[sat_id] = updated_details
                                 sign_and_save_satellite_list()
                                 logger_control.info(f"Satellite updated: {sat_id}")
                             else:
@@ -13315,7 +13443,10 @@ async def handle_node_sync(reader: AsyncStreamReader, writer: AsyncStreamWriter)
                                 # Only update last_seen; don't re-save registry (stripped fields don't change)
                             if IS_ORIGIN and "feeder_block_votes" in payload:
                                 apply_feeder_block_votes_from_source(payload.get("feeder_block_votes", {}), source_is_origin=False)
-                                TRUSTED_SATELLITES[sat_id] = cast(SatelliteInfo, existing_sat2)
+                                TRUSTED_SATELLITES[sat_id] = existing_sat2
+                        # Satellites: apply feeder block votes from origin's full sync response
+                        if not IS_ORIGIN and "feeder_block_votes" in payload:
+                            apply_feeder_block_votes_from_source(payload.get("feeder_block_votes", {}), source_is_origin=True)
                         
                         # Send origin metrics as response to full sync (always send; use safe defaults if self-entry missing)
                         if IS_ORIGIN:
@@ -13341,8 +13472,15 @@ async def handle_node_sync(reader: AsyncStreamReader, writer: AsyncStreamWriter)
                                                   if info.get('mode') == 'satellite']) + 1
                             
                             # Safe metric defaults if origin self-entry missing
-                            origin_metrics = TRUSTED_SATELLITES.get(SATELLITE_ID, {}).get("metrics", get_system_metrics())
-                            origin_repair_metrics = TRUSTED_SATELLITES.get(SATELLITE_ID, {}).get("repair_metrics", {})
+                            origin_info = TRUSTED_SATELLITES.get(SATELLITE_ID) if SATELLITE_ID else None
+                            origin_metrics = (
+                                origin_info.get("metrics", get_system_metrics())
+                                if origin_info else get_system_metrics()
+                            )
+                            origin_repair_metrics = (
+                                origin_info.get("repair_metrics", {})
+                                if origin_info else {}
+                            )
 
                             response = {
                                 "type": "response",
@@ -13426,6 +13564,7 @@ async def handle_node_sync(reader: AsyncStreamReader, writer: AsyncStreamWriter)
 async def handle_repair_rpc(reader: AsyncStreamReader, writer: AsyncStreamWriter) -> None:
     """
     Handle repair job RPC requests from workers.
+
     Also routes feeder/client RPCs.
     
     Purpose:
@@ -13872,12 +14011,12 @@ async def handle_repair_rpc(reader: AsyncStreamReader, writer: AsyncStreamWriter
             # Return simplified matrix: only recent entries (<60 min old)
             now = time.time()
             recent_matrix = {}
-            for (repair_id, storage_id), data in REACHABILITY_MATRIX.items():
-                age = now - data.get("last_check", 0)
+            for (repair_id, storage_id), probe_data in REACHABILITY_MATRIX.items():
+                age = now - probe_data.get("last_check", 0)
                 if age < 3600:  # Only recent probes
                     recent_matrix[(repair_id, storage_id)] = {
-                        "repair_to_storage": data.get("repair_to_storage"),
-                        "storage_to_repair": data.get("storage_to_repair"),
+                        "repair_to_storage": probe_data.get("repair_to_storage"),
+                        "storage_to_repair": probe_data.get("storage_to_repair"),
                         "age_seconds": int(age)
                     }
             
@@ -13966,6 +14105,7 @@ async def handle_repair_rpc(reader: AsyncStreamReader, writer: AsyncStreamWriter
 def _feeder_degraded_policy(size_estimate: int = 0) -> Dict[str, Any]:
     """
     Evaluate feeder upload policy when repairs are degraded.
+
     Returns dict with keys: blocked, warning, reason, status, grace_remaining,
     cap_bytes, used_bytes.
     """
@@ -14019,6 +14159,7 @@ def _feeder_degraded_policy(size_estimate: int = 0) -> Dict[str, Any]:
 async def handle_feeder_rpc_routed(reader: AsyncStreamReader, writer: AsyncStreamWriter, payload: Dict[str, Any], peer_ip: str) -> None:
     """
     Route feeder RPC from handle_repair_rpc.
+
     Payload already parsed; dispatch to handler.
     """
     await handle_feeder_rpc_impl(reader, writer, payload, peer_ip)
@@ -14026,6 +14167,7 @@ async def handle_feeder_rpc_routed(reader: AsyncStreamReader, writer: AsyncStrea
 async def handle_feeder_rpc_impl(reader: AsyncStreamReader, writer: AsyncStreamWriter, payload: Dict[str, Any], peer_ip: str) -> None:
     """
     Handle feeder (client) RPC requests for upload/download/list/health.
+
     Payload already parsed from JSON (no need to read again).
     
     Purpose:
@@ -14206,6 +14348,35 @@ async def handle_feeder_rpc_impl(reader: AsyncStreamReader, writer: AsyncStreamW
                 "reason": "Invalid or rate-limited API key"
             }).encode() + b'\n')
             await writer.drain()
+            return
+        
+        # Check if owner_id is a __BLOCKED__ marker (Task 11)
+        if isinstance(owner_id, str) and owner_id.startswith("__BLOCKED__"):
+            # Extract API key from marker
+            blocked_api_key = owner_id.split("__BLOCKED__", 1)[1] if len(owner_id) > 11 else api_key
+            # Get block reason from FEEDER_BLOCK_VOTES
+            block_entry = FEEDER_ALLOWLIST.get(blocked_api_key, {})
+            feeder_owner = block_entry.get("owner_id", "unknown")
+            vote_info = FEEDER_BLOCK_VOTES.get(feeder_owner, {})
+            block_reason = vote_info.get("block_reason", "policy_violation")
+            
+            # Map reason codes to human-friendly messages
+            reason_messages = {
+                "spam_detected": "Automated spam/abuse detection triggered network-wide feeder block",
+                "policy_violation": "Network policy violation detected",
+                "manual_block": "Manually blocked by network operators",
+                "legacy_block": "Previously blocked (imported from legacy blocklist)"
+            }
+            reason_text = reason_messages.get(block_reason, block_reason)
+            
+            writer.write(json.dumps({
+                "status": "blocked",
+                "reason": reason_text,
+                "discord": "https://discord.gg/SuyB5zkXdN",
+                "message": f"Your feeder account has been blocked. Reason: {reason_text}. Join our Discord to appeal or get support: https://discord.gg/SuyB5zkXdN"
+            }).encode() + b'\n')
+            await writer.drain()
+            logger_storage.warning(f"[Feeder] Blocked upload attempt from {feeder_owner} ({blocked_api_key[:20]}...): {block_reason}")
             return
         
         # Route feeder RPC
@@ -14577,6 +14748,26 @@ async def handle_feeder_rpc_impl(reader: AsyncStreamReader, writer: AsyncStreamW
                 await writer.drain()
                 return
             
+            # Check if feeder is blocked (governance)
+            is_feeder_blocked = False
+            block_reason = ""
+            for api_key, entry in FEEDER_ALLOWLIST.items():
+                if entry.get("owner_id") == owner_id and entry.get("blocked"):
+                    is_feeder_blocked = True
+                    vote_info = FEEDER_BLOCK_VOTES.get(owner_id, {})
+                    block_reason = vote_info.get("block_reason", "policy_violation")
+                    break
+            
+            if is_feeder_blocked:
+                # Return blocked status immediately so feeder exits
+                writer.write(json.dumps({
+                    "status": "blocked",
+                    "reason": block_reason,
+                    "discord": "https://discord.gg/SuyB5zkXdN"
+                }).encode() + b'\n')
+                await writer.drain()
+                return
+            
             policy = _feeder_degraded_policy(0)
             response = {
                 "status": "ok",
@@ -14904,7 +15095,7 @@ async def handle_feeder_rpc_impl(reader: AsyncStreamReader, writer: AsyncStreamW
 
 async def announce_to_origin() -> bool:
     """
-    STEP 2: Announce satellite to origin
+    STEP 2: Announce satellite to origin.
 
     - Non-origin satellites notify the origin of their presence after a short delay (3s)
       to allow boot sequence tasks (key generation, registry loading) to complete.
@@ -14947,7 +15138,7 @@ async def announce_to_origin() -> bool:
 
 async def register_with_origin() -> None:
     """
-    STEP 2: Register satellite with origin
+    STEP 2: Register satellite with origin.
 
     - Non-origin satellites announce themselves to the origin node during boot.
     - Payload sent:
@@ -15074,8 +15265,11 @@ def render_recovery_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> None
 
 
 def render_feeder_home_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> None:
-    """Render Feeder home screen with API key, guard status, and upload activity."""
-    
+    """
+    Render Feeder home screen with API key, guard status, and upload activity.
+
+    Shows feeder identity, connection status, and recent activity.
+    """
     line = 0
     stdscr.addstr(line, 0, "=" * (max_x - 1)); line += 1
     # Center the header text
@@ -15520,7 +15714,10 @@ def render_storagenode_leaderboard_screen(stdscr: Any, max_lines: int, max_x: in
     # Show score breakdown for current node if available
     line += 1
     if line < max_lines - 5:
-        current_node_score = STORAGENODE_SCORES.get(SATELLITE_ID, {})
+        current_node_score: Optional[StoragenodeScore] = (
+            STORAGENODE_SCORES.get(SATELLITE_ID)
+            if SATELLITE_ID else None
+        )
         if current_node_score and 'score_components' in current_node_score:
             stdscr.addstr(line, 0, "Score Breakdown (This Node):"); line += 1
             components = current_node_score['score_components']
@@ -16395,6 +16592,15 @@ def render_repair_screen(stdscr: Any, max_lines: int, max_x: int = 78) -> None:
 FEEDER_TRASH_CACHE: List[Dict[str, Any]] = []
 RECOVERY_CURSOR: int = 0  # Selected item in recovery screen
 RECOVERY_RESTORE_RESULT: str = ""  # Last restore result message
+FEEDER_RESTORE_HANDLER: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None
+
+async def _restore_file_from_trash(item: Dict[str, Any]) -> None:
+    """Restore a deleted file from the feeder recovery screen."""
+    global RECOVERY_RESTORE_RESULT
+    if FEEDER_RESTORE_HANDLER is None:
+        RECOVERY_RESTORE_RESULT = "✗ Restore unavailable: feeder not initialized"
+        return
+    await FEEDER_RESTORE_HANDLER(item)
 
 def render_logs_screen(stdscr: Any, max_lines: int, max_x: int = 78, simple_nav: bool = False) -> None:
     """Render Logs screen with tail view across control/repair/storage logs.
@@ -16444,8 +16650,8 @@ def render_logs_screen(stdscr: Any, max_lines: int, max_x: int = 78, simple_nav:
         if selection == "merged":
             lines = []
             for name, path in LOG_FILES.items():
-                for l in _tail_file(path, n):
-                    lines.append((name, l, _parse_ts(l)))
+                for line_text in _tail_file(path, n):
+                    lines.append((name, line_text, _parse_ts(line_text)))
             # Sort by timestamp descending, then keep last n
             lines.sort(key=lambda x: x[2], reverse=True)
             # Return as tuples to match signature
@@ -16454,7 +16660,10 @@ def render_logs_screen(stdscr: Any, max_lines: int, max_x: int = 78, simple_nav:
             base = LOG_FILES.get(selection)
             if not base:
                 return []
-            return [(selection, l, _parse_ts(l)) for l in _tail_file(base, n)]
+            return [
+                (selection, line_text, _parse_ts(line_text))
+                for line_text in _tail_file(base, n)
+            ]
 
     line_count = max(10, min(20, max_lines - 6))  # aim 10-20 lines depending on space
 
@@ -16738,7 +16947,10 @@ def render_abuse_detection_screen(stdscr: Any, max_lines: int, max_x: int = 78) 
         stdscr.addstr(line, 0, ""); line += 1
         
         # Always show helper bar for consistency
-        stdscr.addstr(line, 0, "Use ↑/↓ to select, [1] review [2] blocked [3] petitions, [V]=Start Petition, [Q]=Home"); line += 1
+        if IS_ORIGIN:
+            stdscr.addstr(line, 0, "Use ↑/↓ to select, [1] review [2] blocked [3] petitions, [V]=Start Petition, [U]=Unblock, [Q]=Home"); line += 1
+        else:
+            stdscr.addstr(line, 0, "Use ↑/↓ to select, [1] review [2] blocked [3] petitions, [V]=Start Petition, [Q]=Home"); line += 1
         line += 1
         
         if blocked_items:
@@ -17412,10 +17624,40 @@ async def curses_ui() -> None:
                                 # Persist petition votes
                                 _persist_feeder_block_votes()
                                 persist_config()
-                            elif key_char == 'u' and blocked_count:  # Unblock (via petition - not immediate)
+                            elif key_char == 'u' and blocked_count and IS_ORIGIN:  # Unblock (origin only - direct override)
                                 ABUSE_DETECTION_CURSOR = max(0, min(ABUSE_DETECTION_CURSOR, blocked_count - 1))
                                 owner_id = blocked_items[ABUSE_DETECTION_CURSOR][0]
-                                log_and_notify(logger_control, 'info', f"Blocked feeder {owner_id[:24]} can petition for unblock")
+                                logger_control.info(f"[UI] Starting unblock for {owner_id}")
+                                # Direct unblock without petition flow
+                                data = FEEDER_BLOCK_VOTES[owner_id]
+                                # Unblock the feeder by removing "blocked" flag from API key
+                                unblocked_count = 0
+                                for api_key, api_entry in FEEDER_ALLOWLIST.items():
+                                    if api_entry.get("owner_id") == owner_id:
+                                        logger_control.info(f"[UI] Found API key {api_key[:20]}... for {owner_id}, blocked={api_entry.get('blocked')}")
+                                        api_entry.pop("blocked", None)
+                                        api_entry.pop("blocked_at", None)
+                                        unblocked_count += 1
+                                        logger_control.info(f"[UI] Cleared blocked flag from FEEDER_ALLOWLIST, blocked={api_entry.get('blocked')}")
+                                        # Persist to config
+                                        feeder_cfg = _CONFIG.setdefault("feeder", {})
+                                        api_keys_cfg = feeder_cfg.setdefault("api_keys", {})
+                                        if api_key in api_keys_cfg:
+                                            api_keys_cfg[api_key].pop("blocked", None)
+                                            api_keys_cfg[api_key].pop("blocked_at", None)
+                                            logger_control.info(f"[UI] Also cleared from config.json")
+                                        break
+                                # Reset voting state
+                                data["block_status"] = "active"
+                                data["block_votes"].clear()
+                                data["block_votes_removed"] = {}
+                                data["block_reason"] = "none"
+                                data["block_petition_history"] = []
+                                data.pop("petition_rejected_at", None)
+                                _persist_feeder_block_votes()
+                                persist_config()
+                                log_and_notify(logger_control, 'info', f"Unblocked feeder {owner_id[:24]} (origin direct override, cleared {unblocked_count} API keys)")
+                                ABUSE_DETECTION_CURSOR = max(0, ABUSE_DETECTION_CURSOR - 1)
                             elif key == curses.KEY_UP:
                                 ABUSE_DETECTION_CURSOR = max(0, ABUSE_DETECTION_CURSOR - 1)
                             elif key == curses.KEY_DOWN:
@@ -17598,8 +17840,8 @@ async def curses_ui() -> None:
                                 LOG_VIEW_SELECTION = 'merged'
                     elif key_char == 'q' and CURRENT_SCREEN != "test":
                         # Exit the program completely from other screens (test screen handled above)
-                            import sys
-                            sys.exit(0)
+                        import sys
+                        sys.exit(0)
                 
                 # Sleep briefly before next refresh (5 seconds)
                 time.sleep(5)
@@ -17628,6 +17870,7 @@ async def curses_ui() -> None:
 async def storagenode_curses_ui() -> None:
     """
     Storage node curses UI - simplified version with only Home and Logs screens.
+
     Storage nodes don't have Satellites/Nodes/Repair screens.
     """
     global CURRENT_SCREEN, USE_CURSES
@@ -17729,6 +17972,7 @@ async def storagenode_curses_ui() -> None:
 async def feeder_curses_ui() -> None:
     """
     Feeder curses UI - simplified version with only Home and Logs screens.
+
     Feeders are clients with minimal monitoring needs.
     """
     global CURRENT_SCREEN, USE_CURSES
@@ -17793,7 +18037,7 @@ async def feeder_curses_ui() -> None:
                             if FEEDER_TRASH_CACHE and 0 <= RECOVERY_CURSOR < len(FEEDER_TRASH_CACHE):
                                 # Trigger restore in background
                                 selected_item = FEEDER_TRASH_CACHE[RECOVERY_CURSOR]
-                                pass  # TODO: asyncio.create_task(_restore_file_from_trash(selected_item))
+                                asyncio.create_task(_restore_file_from_trash(selected_item))
                     elif CURRENT_SCREEN == "logs" and key_char in ('1', '2', '3', 'l'):
                         # Log screen selectors
                         global LOG_VIEW_SELECTION
@@ -17839,7 +18083,8 @@ async def feeder_curses_ui() -> None:
 
 async def draw_ui() -> None:
     """
-    Main UI dispatcher.
+    Dispatch UI rendering based on node type.
+
     Calls curses_ui() if USE_CURSES=True, otherwise draw_ui_legacy().
     For storage nodes, calls storagenode_curses_ui() instead.
     For feeders, calls feeder_curses_ui() instead.
@@ -17884,6 +18129,7 @@ async def draw_ui() -> None:
 async def draw_ui_legacy() -> None:
     """
     STEP 5: Terminal User Interface (UI) for Satellite Node.
+
     Legacy fallback UI (used when --no-curses flag is set).
 
     Purpose:
@@ -18042,7 +18288,7 @@ async def draw_ui_legacy() -> None:
                 
                 # Mark the local satellite with "(this node)"
                 is_local = "(this node)" if sat_id == SATELLITE_ID else ""
-                sat_last_seen: float | int = cast(float | int, sat_info.get('last_seen', 0))
+                sat_last_seen = float(sat_info.get('last_seen', 0) or 0)
                 reachable_direct = sat_info.get('reachable_direct', False)
                 metrics = sat_info.get('metrics', {})
                 
@@ -18224,7 +18470,8 @@ def trigger_erasure_coding_test() -> None:
 
 async def run_erasure_coding_test() -> None:
     """
-    [T] Test erasure coding: Make fragments (k=3, n=5), verify reconstruct from any k
+    [T] Test erasure coding: Make fragments (k=3, n=5), verify reconstruct from any k.
+
     Validates that Reed-Solomon fragmentation and reconstruction work correctly.
     """
     global TEST_LAST_OBJECT_ID, TEST_LAST_RESULT, TEST_LAST_DETAILS
@@ -18306,7 +18553,8 @@ def trigger_crypto_roundtrip_test() -> None:
 
 async def run_crypto_roundtrip_test() -> None:
     """
-    [C] Test crypto roundtrip: Encrypt → decrypt, verify data matches
+    [C] Test crypto roundtrip: Encrypt → decrypt, verify data matches.
+
     Validates that AES-256-GCM encryption and decryption work correctly.
     """
     global TEST_LAST_OBJECT_ID, TEST_LAST_RESULT, TEST_LAST_DETAILS
@@ -18390,7 +18638,8 @@ def trigger_end_to_end_test() -> None:
 
 async def run_end_to_end_test() -> None:
     """
-    [E] End-to-end workflow: Upload object → audit → damage 2 frags → repair → verify
+    [E] End-to-end workflow: Upload object → audit → damage 2 frags → repair → verify.
+
     Full integration test validating upload, audit, damage handling, and repair.
     """
     global TEST_LAST_OBJECT_ID, TEST_LAST_RESULT, TEST_LAST_DETAILS
@@ -18526,6 +18775,7 @@ def trigger_follower_sync_test() -> None:
 async def run_follower_sync_test() -> None:
     """
     [N] Follower sync test: Origin writes → satellites observed as recently reachable.
+
     This validates follower connectivity and basic propagation timing.
     """
     global TEST_LAST_OBJECT_ID, TEST_LAST_RESULT, TEST_LAST_DETAILS
@@ -18593,6 +18843,7 @@ def trigger_quota_enforcement_test() -> None:
 async def run_quota_enforcement_test() -> None:
     """
     [O] Quota enforcement: Verify server-side quota checks reject over-limit requests.
+
     Tests both bytes quota and objects quota logic.
     """
     global TEST_LAST_OBJECT_ID, TEST_LAST_RESULT, TEST_LAST_DETAILS, FEEDER_QUOTA_USAGE
@@ -18662,8 +18913,9 @@ def trigger_corrupt_fragment_test() -> None:
 
 async def run_corrupt_fragment_test() -> None:
     """
-    [B] Corrupt fragment test: create object, delete one shard on a storagenode,
-    and report the deletion result.
+    [B] Corrupt fragment test: create object, delete one shard on a storagenode.
+
+    Reports the deletion result.
     """
     global TEST_LAST_OBJECT_ID, TEST_LAST_RESULT, TEST_LAST_DETAILS
     TEST_LAST_DETAILS.clear()
@@ -18757,9 +19009,7 @@ def trigger_repair_round_robin_test() -> None:
         pass
 
 async def run_repair_claim_test() -> None:
-    """
-    [M] Repair job claim test: create a repair job, claim it, complete it, verify success.
-    """
+    """[M] Repair job claim test: create a repair job, claim it, complete it, verify success."""
     global TEST_LAST_OBJECT_ID, TEST_LAST_RESULT, TEST_LAST_DETAILS
     TEST_LAST_DETAILS.clear()
     try:
@@ -18831,7 +19081,9 @@ def trigger_zone_aware_repair_test() -> None:
 
 async def run_zone_aware_repair_test() -> None:
     """
-    [L] Zone-aware repair job prioritization test:
+    [L] Zone-aware repair job prioritization test.
+
+    Test objectives:
     - Verify zone column exists in repair_jobs table
     - Create multiple repair jobs with different zones
     - Test zone lookup during job creation
@@ -18968,7 +19220,8 @@ def trigger_repair_node_uplink_test() -> None:
 
 async def run_repair_node_uplink_test() -> None:
     """
-    [M] Repair node uplink selection test:
+    [M] Repair node uplink selection test.
+
     - Verify repair node uplink evaluation with zone-aware satellite selection
     - Test origin fallback when no satellites available
     - Test zone preference in uplink candidate scoring
@@ -19063,7 +19316,8 @@ def trigger_feeder_uplink_test() -> None:
 
 async def run_feeder_uplink_test() -> None:
     """
-    Feeder smart satellite selection test:
+    Feeder smart satellite selection test.
+
     - Verify select_feeder_target() chooses best satellite
     - Test zone-aware preference for feeders
     - Test origin fallback when no satellites available
@@ -19166,7 +19420,8 @@ def trigger_centralized_connection_limits_test() -> None:
 
 async def run_centralized_connection_limits_test() -> None:
     """
-    Centralized connection limits test:
+    Centralized connection limits test.
+
     - Verify origin-defined connection limits are propagated
     - Test fallback to local defaults when limits missing
     - Validate enforcement of max_concurrent_connections
@@ -19270,7 +19525,8 @@ def trigger_placement_knobs_test() -> None:
 
 async def run_placement_knobs_test() -> None:
     """
-    Centralized placement knobs test:
+    Centralized placement knobs test.
+
     - Verify origin-defined placement settings propagate to satellites
     - Test fallback to local defaults when settings missing
     - Validate min_distinct_zones, per_zone_cap_pct, min_score enforcement
@@ -19319,9 +19575,11 @@ async def run_placement_knobs_test() -> None:
             TEST_LAST_DETAILS.append(f"    zone_override_map: {len(PLACEMENT_SETTINGS.get('zone_override_map', {}))} entries")
             
             # Verify values changed
-            if (PLACEMENT_SETTINGS.get("min_distinct_zones") == 4 and 
-                PLACEMENT_SETTINGS.get("per_zone_cap_pct") == 0.4 and 
-                PLACEMENT_SETTINGS.get("min_score") == 0.6):
+            if (
+                PLACEMENT_SETTINGS.get("min_distinct_zones") == 4
+                and PLACEMENT_SETTINGS.get("per_zone_cap_pct") == 0.4
+                and PLACEMENT_SETTINGS.get("min_score") == 0.6
+            ):
                 TEST_LAST_DETAILS.append("  ✓ Placement knobs updated correctly")
             else:
                 TEST_LAST_DETAILS.append("  ✗ Placement knobs not updated as expected")
@@ -19385,7 +19643,8 @@ def trigger_feeder_api_keys_test() -> None:
 
 async def run_feeder_api_keys_test() -> None:
     """
-    Centralized feeder API keys test:
+    Centralized feeder API keys test.
+
     - Verify origin fan-out of feeder API keys
     - Test key addition and revocation
     - Validate fallback behavior when keys missing
@@ -19493,8 +19752,9 @@ def trigger_repair_db_cleanup() -> None:
 
 async def run_repair_db_cleanup() -> None:
     """
-    [X] Repair DB cleanup: purge completed/failed (older than 30 days),
-    reclaim expired leases, recompute metrics, and show a summary.
+    [X] Repair DB cleanup: purge completed/failed (older than 30 days).
+
+    Reclaim expired leases, recompute metrics, and show a summary.
     """
     global TEST_LAST_RESULT, TEST_LAST_DETAILS
     TEST_LAST_DETAILS.clear()
@@ -19532,7 +19792,8 @@ def trigger_circuit_breaker_test() -> None:
 
 async def run_circuit_breaker_test() -> None:
     """
-    [U] Circuit breaker test: Verify circuit opens after N consecutive failures.
+    [U] Circuit breaker test: verify circuit opens after N consecutive failures.
+
     - Records N failures on a test node ID
     - Checks circuit opens after threshold
     - Verifies circuit recovers after timeout
@@ -19593,7 +19854,8 @@ def trigger_dead_letter_test() -> None:
 
 async def run_dead_letter_test() -> None:
     """
-    [V] Dead-letter supervisor test: Verify task stops restarting after max_attempts.
+    [V] Dead-letter supervisor test: verify task stops restarting after max_attempts.
+
     - Create a coroutine that always fails
     - Supervise it with max_attempts=2
     - Verify it logs critical event after max failures
@@ -19678,7 +19940,7 @@ async def run_node_status_stability_test() -> None:
         TEST_LAST_DETAILS.append("")
         
         # Initialize tracking for each node from TRUSTED_SATELLITES
-        node_states = {}  # node_id -> {'online': bool, 'direct': bool, 'flip_count_online': int, 'flip_count_direct': int}
+        node_states: Dict[str, NodeState] = {}  # node_id -> {'online': bool, 'direct': bool, 'flip_count_online': int, 'flip_count_direct': int}
         total_flips = 0
         iteration = 0
         start_time = time.time()
@@ -19695,21 +19957,21 @@ async def run_node_status_stability_test() -> None:
                 current_time = time.time()
                 
                 # Collect all nodes to monitor: TRUSTED_SATELLITES + NODES (storage nodes)
-                all_nodes = {}
+                all_nodes: Dict[str, Dict[str, Any]] = {}
                 
                 # Add trusted satellites and repair nodes
                 for sat_id, sat_info in list(TRUSTED_SATELLITES.items()):
-                    all_nodes[sat_id] = sat_info.copy()
+                    all_nodes[sat_id] = dict(sat_info)
                     all_nodes[sat_id]['_source'] = 'satellite'
                 
                 # Add storage nodes from NODES dict
                 for node_id, node_info in list(NODES.items()):
                     if node_id not in all_nodes:  # Avoid duplicates
-                        all_nodes[node_id] = node_info.copy()
+                        all_nodes[node_id] = dict(node_info)
                         all_nodes[node_id]['_source'] = 'storage'
                 
                 # Process each node
-                for node_id, node_info in all_nodes.items():
+                for node_id, node_entry in all_nodes.items():
                     if node_id not in node_states:
                         node_states[node_id] = {
                             'last_online': None,
@@ -19719,12 +19981,12 @@ async def run_node_status_stability_test() -> None:
                         }
                     
                     # Determine if online based on last_seen (online if seen within last 120s)
-                    last_seen = node_info.get('last_seen', 0)
+                    last_seen = float(node_entry.get('last_seen', 0) or 0)
                     seconds_since_seen = current_time - last_seen
                     current_online = seconds_since_seen < 120  # Online if seen in last 120 seconds
                     
                     # Determine if direct reachable
-                    current_direct = node_info.get('reachable_direct', False)
+                    current_direct = bool(node_entry.get('reachable_direct', False))
                     
                     state = node_states[node_id]
                     
@@ -19756,10 +20018,9 @@ async def run_node_status_stability_test() -> None:
                     # Add current status for each node (increased limit to show storage nodes too)
                     for node_id in sorted(set(node_states.keys()))[:15]:
                         state = node_states[node_id]
-                        node_info = all_nodes.get(node_id, {})
                         
                         # Get lifecycle metrics
-                        lifecycle = CONNECTION_LIFECYCLE_TRACKER.get(sat_id, {})
+                        lifecycle = CONNECTION_LIFECYCLE_TRACKER.get(node_id, {})
                         conns = lifecycle.get('connections_opened', len(lifecycle.get('opens', [])))
                         drops = lifecycle.get('connections_closed', len(lifecycle.get('closes', [])))
                         ssl_errors = lifecycle.get('ssl_errors', 0)
@@ -19840,7 +20101,8 @@ def trigger_api_key_revocation_test() -> None:
 
 async def run_api_key_revocation_test() -> None:
     """
-    [W] API key revocation test: Verify revoked keys are rejected.
+    [W] API key revocation test: verify revoked keys are rejected.
+
     - Add a test API key temporarily
     - Verify it works (validate_feeder_api_key succeeds)
     - Remove it (revoke)
@@ -19905,7 +20167,7 @@ def trigger_reachability_routing_test() -> None:
     TEST_LAST_DETAILS.append("=" * 70)
     
     try:
-        results = []
+        results: list[tuple[str, Optional[bool]]] = []
         
         # Test 1: Verify REACHABILITY_MATRIX exists and can be populated
         TEST_LAST_DETAILS.append("")
@@ -20124,7 +20386,7 @@ async def run_cgnat_detection_test() -> None:
         passed = 0
         failed = 0
         for peer_ip, adv_ip, expected, desc in test_cases:
-            result = detect_cgnat_status(peer_ip, adv_ip)
+            result = detect_cgnat_status(peer_ip or "", adv_ip)
             if result == expected:
                 TEST_LAST_DETAILS.append(f"  ✓ {desc}: {result}")
                 passed += 1
@@ -20153,7 +20415,7 @@ async def run_cgnat_detection_test() -> None:
         # Backup original satellites
         orig_satellites = TRUSTED_SATELLITES.copy()
         for node_id, node_info in test_nodes.items():
-            TRUSTED_SATELLITES[node_id] = node_info
+            TRUSTED_SATELLITES[node_id] = cast(SatelliteInfo, node_info)
         
         try:
             # Test cases: (repair_id, storage_id, expected_direction)
@@ -20370,7 +20632,8 @@ def trigger_load_test() -> None:
 
 async def run_load_test() -> None:
     """
-    [Y] Load test: Place multiple objects in parallel to measure throughput.
+    [Y] Load test: place multiple objects in parallel to measure throughput.
+
     - Store 5 small objects concurrently
     - Measure time and success rate
     - Report placements/sec
@@ -20437,7 +20700,8 @@ def trigger_zone_awareness_test() -> None:
 
 async def run_zone_awareness_test() -> None:
     """
-    [Z] Zone awareness test: Verify placement respects zone diversity.
+    [Z] Zone awareness test: verify placement respects zone diversity.
+
     - Store object with explicit k=3, n=5
     - Extract placement and map to zones
     - Verify fragments placed across min_distinct_zones
@@ -20504,7 +20768,8 @@ def trigger_p2p_rebalancing_test() -> None:
 
 async def run_p2p_rebalancing_test() -> None:
     """
-    [T] P2P rebalancing test: Verify rebalance task creation and execution.
+    [T] P2P rebalancing test: verify rebalance task creation and execution.
+
     - Create test object
     - Create rebalance task manually
     - Claim task
@@ -20638,7 +20903,11 @@ def compute_machine_fingerprint() -> str:
                     ["wmic", "logicaldisk", "get", "serialnumber"],
                     capture_output=True, text=True, timeout=5
                 )
-                lines = [l.strip() for l in result.stdout.split('\n') if l.strip() and l.strip() != 'SerialNumber']
+                lines = [
+                    line_item.strip()
+                    for line_item in result.stdout.split('\n')
+                    if line_item.strip() and line_item.strip() != 'SerialNumber'
+                ]
                 disk_serial = lines[0] if lines else "unknown"
             else:
                 # Linux/macOS: try lsblk or ioreg
@@ -20647,7 +20916,11 @@ def compute_machine_fingerprint() -> str:
                         ["lsblk", "-d", "-o", "SERIAL"],
                         capture_output=True, text=True, timeout=5
                     )
-                    lines = [l.strip() for l in result.stdout.split('\n') if l.strip() and l.strip() != 'SERIAL']
+                    lines = [
+                        line_item.strip()
+                        for line_item in result.stdout.split('\n')
+                        if line_item.strip() and line_item.strip() != 'SERIAL'
+                    ]
                     disk_serial = lines[0] if lines else "unknown"
                 except:
                     disk_serial = "unknown"
@@ -20671,7 +20944,7 @@ def compute_machine_fingerprint() -> str:
 
 async def feeder_main() -> None:
     """
-    FEEDER MODE ENTRY POINT
+    FEEDER MODE ENTRY POINT.
     
     Feeder is an external client that uploads/downloads encrypted data to LibreMesh.
     
@@ -20739,6 +21012,33 @@ async def feeder_main() -> None:
         while True:
             guard = await _fetch_guard_status()
             FEEDER_GUARD_CACHE = guard or {}
+            
+            # Check blocked status FIRST (before sig comparison) so we exit immediately
+            if guard.get("status") == "blocked":
+                reason = guard.get("reason", "Blocked by network policy")
+                logger_storage.error("=" * 80)
+                logger_storage.error("[Feeder] ❌ ACCOUNT BLOCKED (guard poll)")
+                logger_storage.error("=" * 80)
+                logger_storage.error(f"[Feeder] Reason: {reason}")
+                logger_storage.error("[Feeder] Discord Support: https://discord.gg/SuyB5zkXdN")
+                logger_storage.error("[Feeder] Exiting immediately.")
+                logger_storage.error("=" * 80)
+                # Show message on terminal before exit
+                try:
+                    import curses
+                    curses.endwin()
+                except:
+                    pass
+                print("\n" + "=" * 80)
+                print("[Feeder] ❌ ACCOUNT BLOCKED")
+                print("=" * 80)
+                print(f"[Feeder] Reason: {reason}")
+                print("[Feeder] Discord Support: https://discord.gg/SuyB5zkXdN")
+                print("[Feeder] Your uploads have been suspended.")
+                print("[Feeder] Join Discord to appeal or contact support.")
+                print("=" * 80 + "\n")
+                os._exit(1)  # Force immediate exit from async task
+            
             sig = (
                 guard.get("status"),
                 guard.get("degraded_status"),
@@ -20766,6 +21066,17 @@ async def feeder_main() -> None:
                     if blocked and guard.get("reason"):
                         line += f" reason={guard.get('reason')}"
                     logger_storage.info(line)
+                    if blocked:
+                        reason = guard.get("reason", "Blocked by network policy")
+                        logger_storage.error("=" * 80)
+                        logger_storage.error("[Feeder] ❌ ACCOUNT BLOCKED (guard poll)")
+                        logger_storage.error("=" * 80)
+                        logger_storage.error(f"[Feeder] Reason: {reason}")
+                        logger_storage.error("[Feeder] Discord Support: https://discord.gg/SuyB5zkXdN")
+                        logger_storage.error("[Feeder] Exiting immediately.")
+                        logger_storage.error("=" * 80)
+                        import sys
+                        sys.exit(1)
                 else:
                     logger_storage.error(f"[Feeder] Guard check failed: {guard.get('reason', 'unknown error')}")
             await asyncio.sleep(30)
@@ -21108,6 +21419,42 @@ async def feeder_main() -> None:
                             
                             response = json.loads(response_line.decode().strip())
                             
+                            # Check if feeder is blocked (Task 11)
+                            if response.get('status') == 'blocked':
+                                reason = response.get('reason', 'Unknown reason')
+                                discord_link = response.get('discord', 'https://discord.gg/SuyB5zkXdN')
+                                message = response.get('message', f'Feeder blocked: {reason}')
+                                
+                                logger_storage.error("=" * 80)
+                                logger_storage.error("[Feeder] ❌ ACCOUNT BLOCKED")
+                                logger_storage.error("=" * 80)
+                                logger_storage.error(f"[Feeder] Reason: {reason}")
+                                logger_storage.error(f"[Feeder] Discord Support: {discord_link}")
+                                logger_storage.error("[Feeder] Your uploads have been suspended.")
+                                logger_storage.error("[Feeder] Join Discord to appeal or contact support.")
+                                logger_storage.error("=" * 80)
+                                
+                                writer.close()
+                                await writer.wait_closed()
+                                
+                                # Show message on terminal before exit
+                                try:
+                                    import curses
+                                    curses.endwin()
+                                except:
+                                    pass
+                                print("\n" + "=" * 80)
+                                print("[Feeder] ❌ ACCOUNT BLOCKED (upload attempt)")
+                                print("=" * 80)
+                                print(f"[Feeder] Reason: {reason}")
+                                print(f"[Feeder] Discord Support: {discord_link}")
+                                print("[Feeder] Your uploads have been suspended.")
+                                print("[Feeder] Join Discord to appeal or contact support.")
+                                print("=" * 80 + "\n")
+                                
+                                # Exit cleanly - feeder cannot operate while blocked
+                                os._exit(1)  # Force immediate exit from async task
+                            
                             if response.get('status') == 'ready':
                                 # Send encrypted file data
                                 writer.write(ciphertext)
@@ -21186,7 +21533,7 @@ async def feeder_main() -> None:
                 # Silently fail - trash fetcher is non-critical
                 pass
     
-    async def _restore_file_from_trash(item: Dict[str, Any]) -> None:
+    async def _restore_file_from_trash_impl(item: Dict[str, Any]) -> None:
         """Restore a deleted file: call restore RPC, download fragments, reconstruct, save to upload dir."""
         global RECOVERY_RESTORE_RESULT, FEEDER_TRASH_CACHE
         
@@ -21356,6 +21703,9 @@ async def feeder_main() -> None:
             RECOVERY_RESTORE_RESULT = f"✗ Restore failed: {str(e)[:50]}"
             logger_storage.error(f"[Feeder] Restore error for {filename}: {e}")
     
+    global FEEDER_RESTORE_HANDLER
+    FEEDER_RESTORE_HANDLER = _restore_file_from_trash_impl
+
     asyncio.create_task(_trash_fetcher())
     
     asyncio.create_task(_file_monitor())
@@ -21369,7 +21719,7 @@ async def feeder_main() -> None:
 
 async def storagenode_main() -> None:
     """
-    STORAGENODE MODE ENTRY POINT
+    STORAGENODE MODE ENTRY POINT.
     
     Lightweight entry point for pure storage nodes. Storage nodes provide
     storage capacity only - no mesh coordination, no UI, no repair work.
@@ -21545,7 +21895,7 @@ async def update_fragment_usage_cache() -> None:
 
 async def storagenode_sync_loop() -> None:
     """
-    PERSISTENT STORAGENODE CONNECTION (Distributed Heartbeat)
+    Maintain persistent storagenode connection (distributed heartbeat).
     
     Maintains a persistent bidirectional control connection to origin.
     Sends periodic heartbeat updates and receives zone/metadata assignments.
@@ -21802,6 +22152,7 @@ async def storagenode_sync_loop() -> None:
 async def send_storagenode_heartbeat() -> None:
     """
     Send storagenode heartbeat message on persistent connection.
+
     Includes storage metrics and current uplink target.
     
     Design: Uses cached fragment usage (updated in background) to avoid
@@ -21868,7 +22219,7 @@ async def send_storagenode_heartbeat() -> None:
 
 async def main() -> None:
     """
-    STEP 1–5: BOOT SEQUENCE ORCHESTRATION
+    STEP 1–5: Boot sequence orchestration.
 
     Entry point for the satellite node. This function performs full
     initialization, role determination, identity setup, trust loading,
@@ -22230,7 +22581,7 @@ async def main() -> None:
 
 async def push_status_to_origin() -> bool:
     """
-    STEP 2–4: PUSH STATUS TO ORIGIN
+    STEP 2–4: Push status to origin.
 
     Sends this satellite's current operational status to the origin node.
     This function is the fundamental reporting mechanism that allows the
@@ -22304,7 +22655,6 @@ async def push_status_to_origin() -> bool:
     This function is a core component of the satellite → origin control
     plane synchronization mechanism.
     """
-   
     if IS_ORIGIN: # Origin never reports status to itself; avoids loopback noise and recursion
         return True  # Return True to indicate success (no backoff needed)
     
@@ -22364,48 +22714,53 @@ async def push_status_to_origin() -> bool:
             "metrics": metrics,  # Include system metrics even in heartbeat
             "uplink_target": UPLINK_TARGET,  # Track which satellite this node is connected to
             # include downstream summary for origin UI
-            "downstream_count": sum(1 for n in NODES.values() if isinstance(n, dict) and n.get('type') == 'storagenode'),
+            "downstream_count": sum(
+                1 for n in NODES.values()
+                if isinstance(n, dict) and n.get('type') == 'storagenode'
+            ),
             "mode": NODE_MODE,  # Send node mode so origin can classify correctly
             "feeder_block_votes": get_satellite_own_votes()  # Propagate only this satellite's votes upstream on heartbeat
         }
 
     try:
-      # Send over persistent connection
-      writer = ORIGIN_CONNECTION.get("writer")
-      if writer is None:
-        logger_control.debug("Push status: writer is None")
-        return False
-      if writer.is_closing():
-        logger_control.debug("Push status: writer is closing")
-        return False
-      writer.write((json.dumps(payload) + "\n").encode())
-      # CRITICAL: drain() with timeout to detect stalled writes (silent failure)
-      try:
-        await asyncio.wait_for(writer.drain(), timeout=5.0)
-      except asyncio.TimeoutError:
-        logger_control.error(f"Push status TIMEOUT during drain (heartbeat lost!)")
-        ORIGIN_CONNECTION["connected"] = False
-        if writer:
-          try:
-            writer.close()
-            await writer.wait_closed()
-          except Exception:
-            pass
-        ORIGIN_CONNECTION["writer"] = None
-        return False
-      return True
+        # Send over persistent connection
+        writer = ORIGIN_CONNECTION.get("writer")
+        if writer is None:
+            logger_control.debug("Push status: writer is None")
+            return False
+        if writer.is_closing():
+            logger_control.debug("Push status: writer is closing")
+            return False
+        writer.write((json.dumps(payload) + "\n").encode())
+        # CRITICAL: drain() with timeout to detect stalled writes (silent failure)
+        try:
+            await asyncio.wait_for(writer.drain(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger_control.error(
+                "Push status TIMEOUT during drain (heartbeat lost!)"
+            )
+            ORIGIN_CONNECTION["connected"] = False
+            if writer:
+                try:
+                    writer.close()
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+            ORIGIN_CONNECTION["writer"] = None
+            return False
+        return True
     except asyncio.TimeoutError:
-      logger_control.error(f"Send timeout: connection stalled")
-      ORIGIN_CONNECTION["connected"] = False
-      return False
+        logger_control.error("Send timeout: connection stalled")
+        ORIGIN_CONNECTION["connected"] = False
+        return False
     except Exception as e:
-      logger_control.error(f"Send error: {e}")
-      ORIGIN_CONNECTION["connected"] = False  # Trigger reconnection
-      return False
+        logger_control.error(f"Send error: {e}")
+        ORIGIN_CONNECTION["connected"] = False  # Trigger reconnection
+        return False
 
 async def origin_self_update_loop() -> None:
     """
-    STEP 7: ORIGIN SELF-UPDATE LOOP
+    STEP 7: Origin self-update loop.
 
     Periodically updates the origin's own last_seen timestamp in TRUSTED_SATELLITES
     so that follower satellites see the origin as online when they fetch the registry.
@@ -22503,7 +22858,7 @@ async def origin_self_update_loop() -> None:
 
 async def repairnode_sync_loop() -> None:
     """
-    PERSISTENT REPAIRNODE CONNECTION (Smart Uplink Selection)
+    Maintain persistent repairnode connection (smart uplink selection).
     
     Maintains a persistent bidirectional control connection to origin or satellite.
     Sends periodic heartbeat updates and receives metrics/commands.
@@ -22769,7 +23124,7 @@ async def repairnode_sync_loop() -> None:
 
 async def node_sync_loop() -> None:
     """
-    STEP 2–4: NODE SYNC LOOP (Persistent Connection Version)
+    STEP 2–4: Node sync loop (persistent connection version).
 
     Maintains a persistent bidirectional control connection to origin or satellite.
     Sends periodic status updates and listens for commands from upstream.
@@ -22791,7 +23146,6 @@ async def node_sync_loop() -> None:
     - Works with CG-NAT (downstream initiates and maintains connection)
     - Reduces origin load by having storage nodes connect to satellites
     """
-    
     global UPLINK_TARGET, UPLINK_LAST_EVALUATION
     
     if IS_ORIGIN:
@@ -23080,7 +23434,7 @@ async def node_sync_loop() -> None:
 
 async def satellite_probe_origin_loop() -> None:
     """
-    STEP 7: SATELLITE ORIGIN PROBE LOOP
+    STEP 7: Satellite origin probe loop.
 
     Periodically probes the origin node's control port to verify direct reachability.
     Only runs on non-origin nodes (satellites).
@@ -23443,7 +23797,7 @@ async def storagenode_p2p_prober() -> None:
 
 async def storagenode_auditor() -> None:
     """
-    Distributed Auditing - Origin creates audit tasks for satellites to execute
+    Distributed auditing - origin creates audit tasks for satellites to execute.
     
     Purpose:
     - Origin creates audit tasks (challenges) instead of running audits directly
@@ -23511,8 +23865,10 @@ async def storagenode_auditor() -> None:
                     continue
                 
                 # Create audit tasks (sample up to AUDITOR_SAMPLE_SIZE)
-                import random
-                sample = random.sample(fragments_to_test, min(AUDITOR_SAMPLE_SIZE, len(fragments_to_test)))
+                sample = random.sample(
+                    fragments_to_test,
+                    min(AUDITOR_SAMPLE_SIZE, len(fragments_to_test))
+                )
                 
                 for obj_id, frag_idx in sample:
                     task_id = f"audit_{sat_id}_{obj_id}_{frag_idx}_{int(time.time() * 1000)}"
@@ -23597,8 +23953,10 @@ async def repair_worker() -> None:
         logger_repair.info(f"[repair_worker] Entering main loop")
         
         worker_id = SATELLITE_ID
-        if isinstance(worker_id, str):
-            log_and_notify(logger_repair, 'info', f"Repair worker {worker_id[:20]} started (mode={NODE_MODE})")
+        if not isinstance(worker_id, str):
+            logger_repair.warning("Repair worker missing SATELLITE_ID; exiting")
+            return
+        log_and_notify(logger_repair, 'info', f"Repair worker {worker_id[:20]} started (mode={NODE_MODE})")
         
         NO_JOB_SLEEP = 30  # Sleep 30s when no jobs available
         ERROR_SLEEP = 60  # Sleep 60s after error
@@ -23695,7 +24053,10 @@ async def repair_worker() -> None:
                 # Early exit once enough shards are collected (threshold = 5 for safety).
                 for sid, info in candidates:
                     try:
-                        host = info.get('hostname')
+                        host_val = info.get('hostname')
+                        host = host_val if isinstance(host_val, str) else None
+                        if not host:
+                            continue
                         port = int(info.get('storage_port', 0))
                         # List all fragment indices for this object on the node
                         frags = await list_fragments(host, port, object_id, expected_fingerprint=info.get('fingerprint')) or []
@@ -24005,6 +24366,8 @@ async def audit_worker() -> None:
                 if not isinstance(target_host, str):
                     raise Exception(f"Invalid target_host type: {type(target_host)}")
                 
+                assert target_info_raw is not None
+
                 # Send challenge RPC
                 reader, writer = await open_secure_connection(target_host, target_port, expected_fingerprint=target_info_raw.get('fingerprint') if target_node_id != SATELLITE_ID else TLS_FINGERPRINT, timeout=10.0)
                 challenge_req = {

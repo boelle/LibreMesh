@@ -1,12 +1,4 @@
-# Security - NEVER commit private keys
-*.pem
-
-# Runtime - Operator specific (NOT the template configs!)
-config.json
-repairs.db
-fragments/
-*.log
-country_zones.json
+# Configuration files
 feeder1_config.json
 feeder2_config.json
 feeder3_config.json
@@ -27,28 +19,6 @@ storagenode1_config_production.json
 storagenode2_config.json
 storagenode3_config.json
 storagenode4_config.json
+
+
 todo.txt
-
-# Python
-__pycache__/
-*.pyc
-
-# Development
-.venv/
-.vscode/
-.github/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# Backup files
-*.bak
-*.backup
-*_backup
-
