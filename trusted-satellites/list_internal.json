@@ -8,7 +8,12 @@
                 "port": 8888,
                 "storage_port": 0,
                 "mode": "origin",
-                "zone": "europe-west"
+                "zone": "eu-west",
+                "city": "Harbo\u00f8re",
+                "coordinates": [
+                    56.6175,
+                    8.18069
+                ]
             },
             {
                 "id": "LibreMesh-Storage-001",
@@ -17,10 +22,10 @@
                 "port": 0,
                 "storage_port": 12800,
                 "mode": "storagenode",
-                "zone": "europe-west"
+                "zone": "test-local"
             }
         ],
         "repair_nodes": []
     },
-    "signature": "igR0H31Ib9jgTYmhfubzUnP5PdS0FtMEvks/5O9KZZ0vBLR5pQOzGAYuyzFN1Y0wNrIMoAcy1Jd+LQeq8mVpSDsOVRTDMAHndBgeimYMgFO0c/z1ZuJki4pUdkmOqly33eZpMDIxdsXt2TXtO902iYIw3W4bJ7lFJU954C7pAcWeIU6A+m+6GI8jQO6zzyuHJAI+CMG4wljuAReuR9+4UGC6dHUZKthPUVIv8/zd/DckjIi7nLBCymzdSwQd7dVp7WDoLMg7efYWHqQn1ferqTepvy+FgvJQLZ/ulTZqrCLt3QbiNZuiGx7wd0UFOKlR0X1eYcUgoIwJ7JUNB+M/cA=="
+    "signature": "fsLlghAzEf5SbDBFAHyAkriB4A65HA8Lw+uzOLdB4xoTorx9L6DAVWhERDRoy/I7z3Xq2QCLUEVz4aV0jkrQ6n6V/RLSYYbJkV899i4Qyf4jAAsTT6u6v09alolQQyiPBwkITBTR8CN7Rv92r+nhp42hlA+8P8aF3x9YCBhnI03tjuH9dfC20b3Yg90RHHWZuxnKHcvwPssupSE+nmXAHp0zzvegnnAnb7SsttygeSG+92gXkXZN0+hb3rOPS/JbDp+fq3qwMIl21KKhAyFhZco2PQKWcyndZ0gbO/lUkyE/L/yIo+oxLi6AYMljAN4zBwBMBDxgVz85/45iSTeAGA=="
 }
